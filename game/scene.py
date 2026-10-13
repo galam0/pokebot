@@ -400,16 +400,18 @@ def _battle_layers(run: dict, message: list[str] | None):
     ov, d = _layer()
     # 상대 정보창
     if e:
-        _panel(d, (6, 8, 146, 48 if e.get("bars", 0) > 1 else 44))
+        e_bottom = 48 if e.get("bars", 0) > 1 else 44
+        if e.get("status"):   # 상태이상은 HP 게이지 아래 오른쪽 (이름 줄을 넓게 쓰게)
+            e_bottom = 52
+        _panel(d, (6, 8, 146, e_bottom))
         lv = f"Lv.{e['lv']}"
-        tags = (_tw("BOSS", BOLD) + 4 if e.get("boss") else 0) + (_tw(E.STATUS_KO[e["status"]]) + 10 if e.get("status") else 0)
+        tags = _tw("BOSS", BOLD) + 4 if e.get("boss") else 0
         name, nf = _shrink(D.name(e["sid"]), 140 - _tw(lv) - 4 - 12 - tags, (BOLD, FONT, SMALL, TINY))
         _text(d, (12, 12 + (BOLD.size - nf.size) // 6), name, font=nf)
-        x = 12 + _tw(name, nf) + 4
         if e.get("boss"):
-            _text(d, (x, 12), "BOSS", font=BOLD, fill=(200, 48, 48))
-            x += _tw("BOSS", BOLD) + 4
-        _status_tag(d, x, 12, e.get("status"))
+            _text(d, (12 + _tw(name, nf) + 4, 12), "BOSS", font=BOLD, fill=(200, 48, 48))
+        if e.get("status"):
+            _status_tag(d, 140 - _tw(E.STATUS_KO[e["status"]]) - 6, 38, e["status"])
         _text(d, (140 - _tw(lv), 12), lv)
         r = e["hp"] / E.max_hp(e)
         _hp_gauge(d, 12, 28, 128, r)
@@ -428,16 +430,16 @@ def _battle_layers(run: dict, message: list[str] | None):
     _panel(d, (172, 98, 314, 142))
     _party_balls(d, 258, 89, run)
     lv = f"Lv.{p['lv']}"
-    tags = _tw(E.STATUS_KO[p["status"]]) + 10 if p.get("status") else 0
-    name, nf = _shrink(D.name(p["sid"]), 308 - _tw(lv) - 4 - 178 - tags, (BOLD, FONT, SMALL, TINY))
+    name, nf = _shrink(D.name(p["sid"]), 308 - _tw(lv) - 4 - 178, (BOLD, FONT, SMALL, TINY))
     _text(d, (178, 102 + (BOLD.size - nf.size) // 6), name, font=nf)
-    _status_tag(d, 178 + _tw(name, nf) + 4, 102, p.get("status"))
     _text(d, (308 - _tw(lv), 102), lv)
     mh = E.max_hp(p)
     r = p["hp"] / mh
     _hp_gauge(d, 178, 115, 130, r)
     hp_txt = f"{p['hp']}/{mh}"
     _text(d, (308 - _tw(hp_txt), 123), hp_txt)
+    if p.get("status"):   # 상태이상은 HP 숫자 바로 왼쪽 (이름 줄을 넓게 쓰게)
+        _status_tag(d, 308 - _tw(hp_txt) - _tw(E.STATUS_KO[p["status"]]) - 10, 122, p["status"])
     need = E.exp_to_next(p)
     _text(d, (178, 131), "EXP", fill=(64, 128, 200))
     _exp_gauge(d, 198, 135, 110, (p["exp"] / need) if need else 1)
@@ -449,10 +451,11 @@ def _battle_layers(run: dict, message: list[str] | None):
         b = run.get("battle") or {}
         if b.get("total", 1) > 1 and e:   # 트레이너의 남은 포켓몬 (볼)
             left = len(b.get("queue", [])) + (1 if e["hp"] > 0 else 0)
+            by = e_bottom + 5
             for i in range(b["total"]):
                 bx = 12 + i * 9
-                d.ellipse((bx, 49, bx + 6, 55), fill=(248, 248, 248), outline=(40, 40, 48))
-                d.chord((bx, 49, bx + 6, 55), 180, 360, fill=(224, 64, 56) if i < left else (128, 128, 136),
+                d.ellipse((bx, by, bx + 6, by + 6), fill=(248, 248, 248), outline=(40, 40, 48))
+                d.chord((bx, by, bx + 6, by + 6), 180, 360, fill=(224, 64, 56) if i < left else (128, 128, 136),
                         outline=(40, 40, 48))
     else:
         tag = f"WAVE {wave}" + (" BOSS" if E.is_boss_wave(wave) else "")
