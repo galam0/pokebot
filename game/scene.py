@@ -12,7 +12,9 @@ from typing import Callable
 from PIL import Image, ImageDraw, ImageFont
 
 from . import data as D
+from . import adventure as A
 from . import engine as E
+from . import kanto as K
 from .text import josa
 
 W, H = 320, 192
@@ -21,6 +23,7 @@ _FONT_DIR = Path(__file__).resolve().parent.parent / "assets" / "fonts"
 # 글자는 3배 크기 그림에 쓰므로 실제 크기도 3배 (좌표는 작은 캔버스 기준)
 FONT = ImageFont.truetype(str(_FONT_DIR / "NanumGothicBold.ttf"), 27)
 BOLD = ImageFont.truetype(str(_FONT_DIR / "NanumGothicExtraBold.ttf"), 29)
+SMALL = ImageFont.truetype(str(_FONT_DIR / "NanumGothicBold.ttf"), 22)
 
 SpriteGetter = Callable[[int, bool], Image.Image | None]   # (종 번호, 뒷모습?) -> 이미지
 
@@ -307,7 +310,8 @@ def _mini_gauge(d, x, y, w, ratio):
 
 def battle(run: dict, get_sprite: SpriteGetter | None = None, message: list[str] | None = None) -> bytes:
     p, e, wave = E.lead(run), run["e"], run["wave"]
-    biome = E.biome(wave)
+    adv = run.get("mode") == "adventure"
+    biome = A.loc(run)["bg"] if adv else E.biome(wave)
     im, d = _canvas()
     _background(d, biome)
 
@@ -338,9 +342,6 @@ def battle(run: dict, get_sprite: SpriteGetter | None = None, message: list[str]
         if e.get("boss"):
             _text(d, (x, 12), "BOSS", font=BOLD, fill=(200, 48, 48))
             x += _tw("BOSS", BOLD) + 4
-        elif run.get("elite"):
-            _text(d, (x, 12), "강적", font=BOLD, fill=(200, 96, 24))
-            x += _tw("강적", BOLD) + 4
         _status_tag(d, x, 12, e.get("status"))
         lv = f"Lv.{e['lv']}"
         _text(d, (140 - _tw(lv), 12), lv)
@@ -374,9 +375,21 @@ def battle(run: dict, get_sprite: SpriteGetter | None = None, message: list[str]
     _text(d, (178, 131), "EXP", fill=(64, 128, 200))
     _exp_gauge(d, 198, 135, 110, (p["exp"] / need) if need else 1)
 
-    # 웨이브 표시 (오른쪽 위 작게)
-    tag = f"WAVE {wave}" + (" BOSS" if E.is_boss_wave(wave) else "")
-    _text(d, (W - _tw(tag) - 6, 3), tag, fill=(255, 255, 255), shadow=(0, 0, 0))
+    # 웨이브 / 장소 표시 (오른쪽 위 작게)
+    if adv:
+        tag = A.loc(run)["n"]
+        _text(d, (W - _tw(tag, SMALL) - 6, 2), tag, font=SMALL, fill=(255, 255, 255), shadow=(0, 0, 0))
+        b = run.get("battle") or {}
+        if b.get("total", 1) > 1 and e:   # 트레이너의 남은 포켓몬 (볼)
+            left = len(b.get("queue", [])) + (1 if e["hp"] > 0 else 0)
+            for i in range(b["total"]):
+                bx = 12 + i * 9
+                d.ellipse((bx, 49, bx + 6, 55), fill=(248, 248, 248), outline=(40, 40, 48))
+                d.chord((bx, 49, bx + 6, 55), 180, 360, fill=(224, 64, 56) if i < left else (128, 128, 136),
+                        outline=(40, 40, 48))
+    else:
+        tag = f"WAVE {wave}" + (" BOSS" if E.is_boss_wave(wave) else "")
+        _text(d, (W - _tw(tag) - 6, 3), tag, fill=(255, 255, 255), shadow=(0, 0, 0))
 
     # 메시지 창
     _message_box(d, message if message is not None else _pick_lines(run))
@@ -389,6 +402,8 @@ def _pick_lines(run: dict) -> list[str]:
     lines = [s for s in lines if s]
     if run["phase"] == "reward":
         return (lines[-1:] if lines else []) + ["보상을 하나 고르세요!"]
+    if run["phase"] == "field":
+        return lines[-3:]
     if run["phase"] == "switch":
         return lines[-2:]
     if run["phase"] == "replace":
@@ -427,7 +442,7 @@ def summary(run: dict, get_sprite: SpriteGetter | None = None, index: int | None
     _text(d, (6, 3), "포켓몬 정보", font=BOLD, fill=(255, 255, 255), shadow=tuple(max(0, c - 90) for c in head))
     dark = tuple(max(0, c - 90) for c in head)
     st = f"스타팅 {D.name(run['starter'])}"
-    wv = f"WAVE {run['wave']}"
+    wv = f"배지 {len(run['badges'])}" if run.get("mode") == "adventure" else f"WAVE {run['wave']}"
     _text(d, (W - _tw(st) - 6, 3), st, fill=(255, 255, 255), shadow=dark)
     _text(d, (W - _tw(st) - 12 - _tw(wv), 3), wv, fill=(255, 255, 255), shadow=dark)
 
@@ -566,7 +581,7 @@ def rewards(run: dict, get_sprite: SpriteGetter | None = None, get_item: ItemGet
     im, d = _canvas()
     _background(d, E.biome(run["wave"]))
     d.rectangle((0, 0, W, 22), fill=(40, 56, 88))
-    title = f"WAVE {run['wave']} 클리어!  " + ("강적 보상! 4개 중 하나" if run.get("elite") else "보상을 하나 고르세요")
+    title = f"WAVE {run['wave']} 클리어!  " + "보상을 하나 고르세요"
     _text(d, (8, 5), title, font=BOLD, fill=(255, 232, 120), shadow=(16, 24, 40))
     money = f"₽{run.get('money', 0):,}"
     _text(d, (W - _tw(money, BOLD) - 8, 5), money, font=BOLD, fill=(255, 255, 255), shadow=(16, 24, 40))
@@ -582,146 +597,6 @@ def rewards(run: dict, get_sprite: SpriteGetter | None = None, get_item: ItemGet
         entries.append({"n": r["n"], "d": r["d"], "icon": icon})
     _cards(im, d, entries)
     # 아래: 파티 6칸
-    _party_strip(im, d, run, get_sprite, 8, 126)
-    return _finish(im, d)
-
-
-# ---------- 갈림길 ----------
-# 아이콘은 16x16 도트 (색만 칠하고 테두리는 자동으로 두른다). 카드에는 2배로 붙인다.
-_PIX_OUTLINE = (48, 32, 40, 255)
-_PIX = {
-    "rest": ({"R": (200, 48, 32), "O": (248, 128, 40), "Y": (255, 208, 64), "W": (255, 248, 200),
-              "b": (184, 120, 72), "B": (120, 72, 40), "g": (150, 150, 160)}, [
-        "................",
-        ".......R........",
-        "......RR........",
-        "......ROR....R..",
-        ".....ROOR...RR..",
-        ".....ROYOR..ROR.",
-        "..R.ROYYOR.ROOR.",
-        ".RR.ROYWYOROYOR.",
-        ".ROROYYWWYOOYOR.",
-        ".ROOOYWWWYYOOR..",
-        "..ROYYWWWWYYOR..",
-        "...ROYWWWWYOR...",
-        "BbbbROOOOOOORbbB",
-        "BBbbbbBBBBbbbbBB",
-        ".g.BBBBBBBBBB.g.",
-        "gg..........gg..",
-    ]),
-    "mystery": ({"P": (160, 104, 200), "p": (104, 56, 144), "G": (240, 192, 64), "y": (255, 240, 160),
-                 "Q": (255, 224, 72)}, [
-        ".....QQQQQ......",
-        "....QQ...QQ.....",
-        ".........QQ.....",
-        "........QQ......",
-        ".......QQ.......",
-        "................",
-        ".......QQ.......",
-        "................",
-        ".GPPPPPPPPPPPPG.",
-        "GPPPPPPPPPPPPPPG",
-        "GppppppGGppppppG",
-        "GGGGGGGyyGGGGGGG",
-        "GPPPPPPGGPPPPPPG",
-        "GPPPPPPPPPPPPPPG",
-        "GppppppppppppppG",
-        "GGGGGGGGGGGGGGGG",
-    ]),
-    "market": ({"R": (216, 56, 56), "W": (255, 248, 240), "D": (96, 72, 64), "T": (200, 144, 80),
-                "t": (160, 104, 56), "P": (176, 96, 208), "B": (88, 144, 240), "k": (48, 32, 40)}, [
-        "RRRWWWRRRWWWRRRW",
-        "RRRWWWRRRWWWRRRW",
-        "RRRWWWRRRWWWRRRW",
-        ".R..W..R..W..R..",
-        ".tDDDDDDDDDDDDt.",
-        ".tDDDDDDDDDDDDt.",
-        ".tDDPDDDDDRRRDt.",
-        ".tDPPPDBBDkWkDt.",
-        ".tDPPPDBBDWWWDt.",
-        "TTTTTTTTTTTTTTTT",
-        "TttttttttttttttT",
-        "TttttttttttttttT",
-        "TttttttttttttttT",
-        "TTTTTTTTTTTTTTTT",
-        ".t............t.",
-        ".t............t.",
-    ]),
-    "train": ({"S": (96, 104, 120), "L": (176, 184, 200), "H": (216, 216, 224), "h": (144, 144, 152),
-               "B": (120, 200, 255)}, [
-        "................",
-        "................",
-        "................",
-        "................",
-        ".LL..........LL.",
-        "LSSL........LSSL",
-        "LSSL........LSSL",
-        "LSSLHHHHHHHHLSSL",
-        "LSSLhhhhhhhhLSSL",
-        "LSSL........LSSL",
-        "LSSL........LSSL",
-        ".LL..........LL.",
-        "................",
-        "................",
-        "................",
-        "................",
-    ]),
-}
-
-
-def _sword_icon() -> dict:
-    """강적의 길: 엇갈린 두 자루의 칼"""
-    px: dict[tuple[int, int], tuple] = {}
-    steel, edge, gold, grip = (240, 240, 248), (152, 160, 184), (240, 192, 64), (136, 80, 48)
-    for flip in (False, True):
-        put = (lambda x, y, c: px.__setitem__((15 - x if flip else x, y), c))
-        for t in range(10):
-            put(t, t, steel)
-            put(t + 1, t, edge)
-        for gx, gy in ((12, 9), (11, 10), (10, 11), (9, 12)):
-            put(gx, gy, gold)
-        for t in (11, 12, 13):
-            put(t, t, grip)
-        put(14, 14, gold)
-    return px
-
-
-def _pix_image(key: str) -> Image.Image:
-    if key == "elite":
-        px = _sword_icon()
-    else:
-        pal, rows = _PIX[key]
-        px = {(x, y): pal[c] for y, row in enumerate(rows) for x, c in enumerate(row) if c != "."}
-    im = Image.new("RGBA", (18, 18), (0, 0, 0, 0))
-    for (x, y), c in px.items():
-        im.putpixel((x + 1, y + 1), tuple(c) + (255,))
-    # 테두리: 칠한 칸 옆(상하좌우)의 빈 칸
-    a = im.copy()
-    for y in range(18):
-        for x in range(18):
-            if a.getpixel((x, y))[3]:
-                continue
-            if any(0 <= x + dx < 18 and 0 <= y + dy < 18 and a.getpixel((x + dx, y + dy))[3]
-                   for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))):
-                im.putpixel((x, y), _PIX_OUTLINE)
-    return im.resize((36, 36), Image.NEAREST)
-
-
-PATH_ICON = {k: _pix_image(k) for k in ("rest", "elite", "market", "mystery", "train")}
-
-
-def paths(run: dict, get_sprite: SpriteGetter | None = None) -> bytes:
-    im, d = _canvas()
-    _background(d, E.biome(run["wave"]))
-    d.rectangle((0, 0, W, 22), fill=(40, 56, 88))
-    _text(d, (8, 5), "갈림길! 어느 길로 갈까?", font=BOLD, fill=(255, 232, 120), shadow=(16, 24, 40))
-    wv = f"WAVE {run['wave'] + 1}"
-    _text(d, (W - _tw(wv) - 8, 5), wv, fill=(255, 255, 255), shadow=(16, 24, 40))
-    entries = []
-    for key in run.get("paths", []):
-        pth = E.PATHS[key]
-        entries.append({"n": pth["n"].split(" ", 1)[1], "d": pth["d"], "pix": PATH_ICON[key]})
-    _cards(im, d, entries)
     _party_strip(im, d, run, get_sprite, 8, 126)
     return _finish(im, d)
 
@@ -746,6 +621,173 @@ def _party_strip(im, d, run: dict, get_sprite, x0: int, y0: int):
         lv = f"Lv.{m['lv']}"
         _text(d, (sx + slot // 2 - _tw(lv) // 2, y0 + 37), lv)
         _mini_gauge(d, sx + 5, y0 + 50, slot - 10, m["hp"] / E.max_hp(m))
+
+
+# ---------- 모험: 필드 화면 ----------
+BADGE_RGB = [(168, 168, 176), (88, 152, 240), (240, 160, 48), (120, 200, 96), (240, 120, 176), (232, 196, 64),
+             (224, 72, 48), (72, 168, 104)]
+
+
+def _badge(d, x, y, i: int, got: bool):
+    """배지 한 개 (13x13). 없으면 빈 자리"""
+    if not got:
+        d.ellipse((x + 1, y + 1, x + 11, y + 11), outline=(150, 150, 160))
+        return
+    col = BADGE_RGB[i]
+    dark = tuple(max(0, c - 90) for c in col)
+    light = tuple(min(255, c + 80) for c in col)
+    cx, cy = x + 6, y + 6
+    shape = [
+        [(cx - 3, y), (cx + 3, y), (x + 12, cy - 3), (x + 12, cy + 3), (cx + 3, y + 12), (cx - 3, y + 12),
+         (x, cy + 3), (x, cy - 3)],                                                    # 회색: 팔각형 바위
+        [(cx, y), (x + 11, cy + 2), (cx + 3, y + 12), (cx - 3, y + 12), (x + 1, cy + 2)],   # 블루: 물방울
+        [(cx, y), (cx + 2, cy - 2), (x + 12, cy), (cx + 2, cy + 2), (cx, y + 12), (cx - 2, cy + 2), (x, cy),
+         (cx - 2, cy - 2)],                                                            # 오렌지: 별
+        [(cx, y), (x + 12, cy), (cx, y + 12), (x, cy)],                                # 무지개: 마름모
+        [(cx, y + 3), (cx + 3, y), (x + 12, y + 3), (x + 12, cy), (cx, y + 12), (x, cy), (x, y + 3), (cx - 3, y)],   # 핑크: 하트
+        None,                                                                          # 골드: 고리
+        [(cx, y), (x + 11, y + 12), (x + 1, y + 12)],                                  # 진홍: 불꽃
+        [(x + 1, y + 11), (x + 2, y + 3), (x + 11, y + 1), (x + 10, y + 9)],           # 그린: 잎
+    ][i]
+    if shape is None:
+        d.ellipse((x, y, x + 12, y + 12), fill=col, outline=dark)
+        d.ellipse((x + 4, y + 4, x + 8, y + 8), fill=dark)
+    else:
+        d.polygon(shape, fill=col, outline=dark)
+    d.point((cx - 2, cy - 2), fill=light)
+    d.point((cx - 1, cy - 3), fill=light)
+
+
+def _badge_case(d, x, y, run: dict):
+    _panel(d, (x, y, x + 8 * 16 + 6, y + 18), fill=(56, 48, 72), edge=(24, 20, 32))
+    for i, g in enumerate(K.GYM_ORDER):
+        _badge(d, x + 4 + i * 16, y + 3, i, g in run["badges"])
+
+
+def _facility_lines(run: dict) -> list[tuple[str, tuple]]:
+    """필드 화면 오른쪽에 쓸 장소 정보 (글자, 색)"""
+    L = A.loc(run)
+    out = []
+    if A.in_league(run):
+        out.append((f"다음 상대: {run['chain'][0]['name']}", (176, 48, 48)))
+    if L.get("home"):
+        out.append(("집 · 쉬면 회복", (200, 64, 64)))
+    if L.get("center"):
+        out.append(("포켓몬센터", (216, 64, 72)))
+    if L.get("mart"):
+        out.append(("프렌들리숍" + (" · 백화점" if L.get("dept") else ""), (56, 112, 208)))
+    gkey, ok, _ = A.gym_state(run)
+    if gkey:
+        g = K.GYMS[gkey]
+        state = "배지 획득" if gkey in run["badges"] else ("도전 가능" if ok else "문이 잠김")
+        out.append((f"체육관 · 관장 {g['leader']} ({state})", (160, 96, 24)))
+    if L.get("league"):
+        out.append(("포켓몬 리그" + (" · 도전 가능" if A.league_ready(run) else " · 배지 8개 필요"), (176, 136, 24)))
+    if L.get("trainers"):
+        left = len(A.trainers_left(run))
+        out.append((f"트레이너 {left}명 남음" if left else "트레이너 모두 이김", (72, 72, 88)))
+    if L.get("wild"):
+        lo = min(w[1] for w in L["wild"])
+        hi = max(w[2] for w in L["wild"])
+        out.append((f"야생 포켓몬 Lv.{lo}~{hi}", (56, 136, 72)))
+    if A.legend_available(run):
+        out.append(("강한 기운이 느껴진다...", (136, 72, 168)))
+    if A.gift_available(run):
+        out.append(("받을 수 있는 포켓몬이 있다", (200, 96, 152)))
+    return out
+
+
+def field(run: dict, get_sprite: SpriteGetter | None = None) -> bytes:
+    L = A.loc(run)
+    im, d = _canvas()
+    _background(d, L["bg"])
+    d.rectangle((0, 0, W, 20), fill=(40, 56, 88))
+    _text(d, (8, 4), L["n"], font=BOLD, fill=(255, 232, 120), shadow=(16, 24, 40))
+    money = f"₽{run.get('money', 0):,}"
+    _text(d, (W - _tw(money) - 8, 6), money, fill=(255, 255, 255), shadow=(16, 24, 40))
+    # 왼쪽: 맨 앞 포켓몬
+    _platform(d, 56, 112, 44, 10, L["bg"])
+    if run["party"]:
+        sp = _sprite(get_sprite, E.lead(run)["sid"], False)
+        im.paste(sp, (56 - sp.width // 2, 116 - sp.height), sp)
+    cap = "없음" if run.get("hof") else f"Lv.{A.level_cap(run)}"
+    tag = f"레벨 제한 {cap}" + (f" · 박스 {len(run['box'])}" if run.get("box") else "")
+    _text(d, (8, 24), tag, font=SMALL, fill=(255, 255, 255), shadow=(16, 24, 40))
+    # 오른쪽: 배지 + 장소 정보
+    _badge_case(d, 178, 24, run)
+    lines = _facility_lines(run)[:6]
+    _panel(d, (112, 46, 314, 46 + 6 + max(1, len(lines)) * 11), fill=(248, 248, 240))
+    for i, (s, col) in enumerate(lines):
+        _text(d, (118, 49 + i * 11), s, font=SMALL, fill=col)
+    if not lines:
+        _text(d, (118, 49), "조용한 곳이다.", font=SMALL, fill=(88, 88, 104))
+    _party_strip(im, d, run, get_sprite, 8, 126)
+    return _finish(im, d)
+
+
+# ---------- 모험: 관동 지도 ----------
+KIND_RGB = {"town": (232, 80, 72), "route": (248, 224, 152), "cave": (136, 104, 80), "building": (152, 120, 200),
+            "water": (120, 184, 248)}
+
+
+def kanto_map(run: dict) -> bytes:
+    im, d = _canvas((64, 128, 200))
+    for y in range(0, H, 6):   # 바다 물결
+        for x in range((y // 6 % 2) * 6, W, 12):
+            d.line((x, y, x + 3, y), fill=(80, 144, 216))
+    here = run["loc"]
+    near = K.LOCATIONS[here]["links"]
+    seen = set()
+    for k, L in K.LOCATIONS.items():   # 길
+        for nb in L["links"]:
+            if (nb, k) in seen:
+                continue
+            seen.add((k, nb))
+            ok = A.can_enter(run, k)[0] and A.can_enter(run, nb)[0]
+            a, b = L["pos"], K.LOCATIONS[nb]["pos"]
+            d.line((*a, *b), fill=(48, 64, 96), width=5)
+            d.line((*a, *b), fill=(248, 232, 176) if ok else (120, 136, 168), width=3)
+    for k, L in K.LOCATIONS.items():   # 장소
+        x, y = L["pos"]
+        ok = A.can_enter(run, k)[0]
+        col = KIND_RGB[L["kind"]] if ok else (112, 120, 144)
+        edge = (40, 32, 48)
+        if L["kind"] == "town":
+            d.rectangle((x - 5, y - 5, x + 5, y + 5), fill=col, outline=edge)
+            d.line((x - 4, y - 4, x + 4, y - 4), fill=tuple(min(255, c + 60) for c in col))
+        else:
+            d.ellipse((x - 3, y - 3, x + 3, y + 3), fill=col, outline=edge)
+        if k == here:
+            d.rectangle((x - 8, y - 8, x + 8, y + 8), outline=(255, 255, 255))
+            d.rectangle((x - 9, y - 9, x + 9, y + 9), outline=(232, 48, 48))
+    # 이름표: 지금 장소와 바로 갈 수 있는 곳만 (서로 겹치지 않는 자리를 찾아서)
+    taken = [(0, 0, W, 17)]
+    for k in [here] + list(near):
+        L = K.LOCATIONS[k]
+        x, y = L["pos"]
+        ok = A.can_enter(run, k)[0]
+        name = L["n"] if ok or k == here else L["n"] + " (잠김)"
+        w, h = _tw(name, SMALL), 9
+        spots = [(x - w // 2, y + 8), (x - w // 2, y - 8 - h), (x + 9, y - h // 2), (x - 9 - w, y - h // 2)]
+        best = None
+        for tx, ty in spots:
+            tx = min(max(2, tx), W - w - 2)
+            ty = min(max(18, ty), H - h - 2)
+            box = (tx - 1, ty - 1, tx + w + 1, ty + h + 1)
+            if not any(box[0] < b[2] and b[0] < box[2] and box[1] < b[3] and b[1] < box[3] for b in taken):
+                best = (tx, ty, box)
+                break
+        if best is None:
+            tx, ty = min(max(2, x - w // 2), W - w - 2), min(max(18, y + 8), H - h - 2)
+            best = (tx, ty, (tx, ty, tx + w, ty + h))
+        taken.append(best[2])
+        fill = (255, 232, 120) if k == here else ((255, 255, 255) if ok else (184, 192, 208))
+        _text(d, (best[0], best[1] - 1), name, font=SMALL, fill=fill, shadow=(16, 24, 40))
+    d.rectangle((0, 0, W, 15), fill=(40, 56, 88))
+    _text(d, (6, 1), "관동 지도", font=BOLD, fill=(255, 232, 120), shadow=(16, 24, 40))
+    info = f"배지 {len(run['badges'])}/8"
+    _text(d, (W - _tw(info, SMALL) - 6, 1), info, font=SMALL, fill=(255, 255, 255), shadow=(16, 24, 40))
+    return _finish(im, d)
 
 
 # ---------- 파티 화면 ----------

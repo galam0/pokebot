@@ -126,7 +126,7 @@ def learn_action(run, rng):
 def play(starter, rng, mode="normal", seed=None):
     run = E.new_run(starter, rng, mode, seed)
     steps = 0
-    while run["phase"] in ("battle", "reward", "switch", "replace", "learn", "path"):
+    while run["phase"] in ("battle", "reward", "switch", "replace", "learn"):
         steps += 1
         if steps > 20000:
             break
@@ -137,10 +137,6 @@ def play(starter, rng, mode="normal", seed=None):
             E.switch(run, best_member(run), rng)
         elif ph == "learn":
             learn_action(run, rng)
-        elif ph == "path":
-            hurt = sum(1 for m in run["party"] if m["hp"] < E.max_hp(m) * 0.5)
-            pref = (["rest"] if hurt >= 2 else []) + ["train", "mystery", "market", "elite", "rest"]
-            E.resolve_path(run, next(k for k in pref if k in run["paths"]), rng)
         elif ph == "replace":
             new = run["pending"]["mon"]
             weakest = min(range(len(run["party"])), key=lambda i: D.bst(run["party"][i]["sid"]) + run["party"][i]["lv"] * 3)

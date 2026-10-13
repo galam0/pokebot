@@ -98,17 +98,6 @@ def allowed(run: dict, sid: int) -> bool:
     return not mono or mono in D.types(sid)
 
 
-# ---------- 갈림길 (몇 웨이브마다 다음 길 고르기) ----------
-PATHS = {
-    "rest":    {"n": "🏕️ 쉼터", "d": "푹 쉬면 HP가 차고 기절한 포켓몬도 깬다"},
-    "elite":   {"n": "⚔️ 강적의 길", "d": "센 상대가 나오는 대신 돈 2배, 보상 4개"},
-    "market":  {"n": "🛒 떠돌이 상인", "d": "다음 상점에서 30% 싸게 살 수 있다"},
-    "mystery": {"n": "❓ 수상한 상자", "d": "뭐가 들었을까? 함정일지도 모른다"},
-    "train":   {"n": "🥋 수련장", "d": "파티 모두가 경험치를 듬뿍 얻는다"},
-}
-PATH_AFTER = (3, 6)   # 각 10웨이브 구간에서 3, 6웨이브를 깬 뒤 갈림길
-
-
 STRUGGLE = {"n": "발버둥", "t": 0, "p": 50, "a": None, "c": 0, "pr": 0, "pp": 1}   # PP가 모두 떨어지면
 
 
@@ -324,7 +313,7 @@ def normalize(run: dict) -> dict:
         m.setdefault("pend", [])
         fix_pp(m)
     if run.get("phase") == "learn" and learner(run) is None:   # 예전 버그로 멈춘 게임 풀기
-        run["phase"] = "reward"
+        run["phase"] = "field" if run.get("mode") == "adventure" else "reward"
     return run
 
 
@@ -453,19 +442,6 @@ def start_wave(run: dict, rng: random.Random) -> list[str]:
         run["e"] = nxt["mon"]
     else:
         run["e"] = next_enemy(run, wave, rng)
-    run["elite"] = bool(run.pop("elite_next", False))
-    if run["elite"]:
-        e = run["e"]
-        hp_ratio = 1.0
-        e["lv"] = min(MAX_LEVEL, e["lv"] + 4)
-        e["moves"] = pick_moves(e["sid"], e["lv"])
-        e["pp"], e["ppx"] = [], []
-        fix_pp(e)
-        e["hp"] = int(max_hp(e) * hp_ratio)
-    if run.get("ambush_next"):
-        run.pop("ambush_next")
-        run["e"]["lv"] = min(MAX_LEVEL, run["e"]["lv"] + 2)
-        run["e"]["hp"] = max_hp(run["e"])
     sid, lv, boss = run["e"]["sid"], run["e"]["lv"], run["e"]["boss"]
     for m in run["party"]:
         _reset_battle_state(m)
@@ -475,7 +451,7 @@ def start_wave(run: dict, rng: random.Random) -> list[str]:
     run["rerolls"] = 0
     run["turn"] = 0
     lv = run["e"]["lv"]
-    tag = "⚠️ 마지막 보스 " if wave == FINAL_WAVE else ("👑 보스 " if boss else ("⚔️ 강적 " if run["elite"] else "야생의 "))
+    tag = "⚠️ 마지막 보스 " if wave == FINAL_WAVE else ("👑 보스 " if boss else "야생의 ")
     msgs.append(f"{tag}**{D.name(sid)}** Lv.{lv}이(가) 나타났다!")
     if boss:
         msgs.append(f"보스는 HP 보호막이 {run['e']['bars']}칸 있다! 칸이 깨질 때마다 더 강해진다.")
@@ -718,6 +694,9 @@ def _on_lead_fainted(run: dict, log: list) -> str:
         run["phase"] = "switch"
         log.append("다음 포켓몬을 골라 주세요!")
         return "switch"
+    if run.get("mode") == "adventure":
+        from . import adventure
+        return adventure.blackout(run, log)
     run["phase"] = "over"
     log.append("눈앞이 캄캄해졌다...")
     return "lose"
@@ -834,9 +813,18 @@ for _sp in D.SPECIES.values():   # 진화의 돌 등 진화 아이템
     for _c, _how, _val in _sp["evo"]:
         if _how == "item" and _val not in ITEMS:
             ITEMS[_val] = {"cat": "evo", "price": 0, "d": "쓰면 진화하는 포켓몬이 있다"}
-CAT_ORDER = ["ball", "heal", "status", "revive", "pp", "ppup", "battle", "evo", "held"]
+VIT_ITEMS = ["hp-up", "protein", "iron", "calcium", "zinc", "carbos"]   # 맥스업 타우린 사포닌 리보플라빈 키토산 알칼로이드
+for _i, _k in enumerate(VIT_ITEMS):
+    ITEMS[_k] = {"cat": "vit", "vit": _i, "price": 9800, "d": f"{D.STAT_KO[_i]} 능력치가 오른다"}
+ITEMS["rare-candy"] = {"cat": "candy", "price": 4800, "d": "레벨이 1 오른다"}
+for _mid, _m in D.MOVES.items():   # 기술머신 (몇 번이고 쓸 수 있다)
+    ITEMS[f"tm{_mid}"] = {"cat": "tm", "mid": _mid, "price": 3000 if _m["p"] <= 80 else 7500,
+                          "d": f"{D.TYPE_KO[_m['t']]} {'물리' if _m['c'] == 0 else '특수'} 위력 {_m['p']} · 몇 번이고 쓸 수 있다"}
+CAT_ORDER = ["ball", "heal", "status", "revive", "pp", "ppup", "battle", "vit", "candy", "tm", "evo", "held"]
 CAT_KO = {"ball": "볼", "heal": "회복", "status": "상태이상", "revive": "기절 회복", "pp": "PP 회복",
-          "ppup": "PP 늘리기", "battle": "배틀용", "evo": "진화", "held": "지닌 물건"}
+          "ppup": "PP 늘리기", "battle": "배틀용", "vit": "영양제", "candy": "이상한사탕", "tm": "기술머신",
+          "evo": "진화", "held": "지닌 물건"}
+OUT_OF_BATTLE = ("reward", "field")   # 배틀 밖 (로그라이크 보상 고르기 / 모험 필드)
 SHOP = ["poke-ball", "great-ball", "ultra-ball", "quick-ball", "timer-ball", "net-ball", "heal-ball",
         "potion", "super-potion", "hyper-potion", "max-potion", "full-restore",
         "antidote", "paralyze-heal", "burn-heal", "ice-heal", "full-heal",
@@ -845,6 +833,8 @@ SHOP = ["poke-ball", "great-ball", "ultra-ball", "quick-ball", "timer-ball", "ne
 
 
 def item_name(item: str) -> str:
+    if item.startswith("tm") and item[2:].isdigit():
+        return f"기술머신 {D.MOVES[int(item[2:])]['n']}"
     return D.item_name(item)
 
 
@@ -864,13 +854,11 @@ def item_usable_now(run: dict, item: str) -> bool:
     cat = ITEMS[item]["cat"]
     if run.get("rule") == "noitems" and cat != "ball":
         return False
-    if cat == "ball":
+    if cat in ("ball", "battle"):
         return run["phase"] == "battle"
-    if cat == "battle":
-        return run["phase"] == "battle"
-    if cat in ("evo", "held", "ppup"):
-        return run["phase"] == "reward"   # 배틀 밖에서만
-    return run["phase"] in ("battle", "reward")
+    if cat in ("evo", "held", "ppup", "vit", "candy", "tm"):
+        return run["phase"] in OUT_OF_BATTLE   # 배틀 밖에서만
+    return run["phase"] == "battle" or run["phase"] in OUT_OF_BATTLE
 
 
 def item_targets(run: dict, item: str) -> list[int]:
@@ -887,6 +875,13 @@ def item_targets(run: dict, item: str) -> list[int]:
             ok = evo_child(m, item) is not None
         elif cat == "held":
             ok = m.get("held") != item
+        elif cat == "vit":
+            ok = m["vit"][it["vit"]] < MAX_VITAMIN
+        elif cat == "candy":
+            ok = m["lv"] < level_cap(m)
+        elif cat == "tm":
+            ok = (it["mid"] in D.SPECIES[m["sid"]]["tm"] and it["mid"] not in m["moves"]
+                  and it["mid"] not in m.get("pend", []))
         elif m["hp"] <= 0:
             ok = False
         elif cat == "heal":
@@ -934,8 +929,12 @@ def use_item(run: dict, item: str, target: int, rng: random.Random | None = None
     it = ITEMS[item]
     if item_moves(run, item, target) and move_index not in item_moves(run, item, target):
         raise ValueError("need move")
-    _take(run, item)
     cat, m = it["cat"], run["party"][target]
+    if cat == "tm":   # 기술머신은 없어지지 않는다
+        if run["bag"].get(item, 0) <= 0:
+            raise ValueError("no item")
+    else:
+        _take(run, item)
     name = D.name(m["sid"])
     log = [f"🎒 {item_name(item)}을(를) 썼다!"]
     if cat == "revive":
@@ -974,6 +973,18 @@ def use_item(run: dict, item: str, target: int, rng: random.Random | None = None
             log.append(f"{name}은(는) 의욕이 넘친다! (급소율 업)")
     elif cat == "evo":
         log.extend(evolve(m, evo_child(m, item)))
+    elif cat == "vit":
+        i = it["vit"]
+        old_max = max_hp(m)
+        m["vit"][i] += 1
+        if i == 0 and m["hp"] > 0:
+            m["hp"] += max_hp(m) - old_max
+        log.append(f"{name}의 {D.STAT_KO[i]}이(가) 올랐다! ({m['vit'][i]}/{MAX_VITAMIN})")
+    elif cat == "candy":
+        m["exp"] = 0
+        log.extend(level_up(m))
+    elif cat == "tm":
+        log.append(learn(m, it["mid"]) or "")
     elif cat == "held":
         old = m.get("held")
         m["held"] = item
@@ -983,8 +994,8 @@ def use_item(run: dict, item: str, target: int, rng: random.Random | None = None
             add_item(run, old)
             log.append(f"원래 지니고 있던 {item_name(old)}은(는) 가방에 넣었다.")
     if run["phase"] != "battle":
-        run["log"] = log
-        _maybe_learn(run, "reward")
+        run["log"] = [x for x in log if x]
+        _maybe_learn(run, run["phase"])
         return "continue"
     _enemy_turn(run, log, rng)
     return _after_enemy_action(run, log, rng)
@@ -1022,6 +1033,11 @@ def catch_chance(run: dict, item: str) -> float:
     return (b / 65536) ** 4
 
 
+def can_catch(run: dict) -> bool:
+    """트레이너의 포켓몬은 잡을 수 없다 (모험)"""
+    return (run.get("battle") or {}).get("kind", "wild") in ("wild", "legend")
+
+
 def throw_ball(run: dict, item: str, rng: random.Random | None = None) -> str:
     """볼 던지기. 결과: 'caught' | 'replace'(파티가 가득) | 'learn' | 'continue' | 'switch' | 'lose' | 'win'"""
     rng = rng or random.Random()
@@ -1029,6 +1045,8 @@ def throw_ball(run: dict, item: str, rng: random.Random | None = None) -> str:
         raise ValueError("not a ball")
     if not allowed(run, run["e"]["sid"]):
         raise ValueError("mono rule")
+    if not can_catch(run):
+        raise ValueError("trainer pokemon")
     chance = catch_chance(run, item)
     _take(run, item)
     e = run["e"]
@@ -1052,6 +1070,11 @@ def throw_ball(run: dict, item: str, rng: random.Random | None = None) -> str:
         if run.get("rule") == "lv50":
             mon["cap"] = 50
         log.extend(win(run, rng, caught=True))
+        if run.get("mode") == "adventure":
+            from . import adventure
+            log.extend(adventure.add_caught(run, mon))
+            run["log"] = log
+            return "learn" if run["phase"] == "learn" else "caught"
         if len(run["party"]) < MAX_PARTY:
             run["party"].append(mon)
             log.append(f"{ename}이(가) 파티에 들어왔다! ({len(run['party'])}/{MAX_PARTY})")
@@ -1101,7 +1124,7 @@ def learner(run: dict) -> int | None:
 
 
 def _maybe_learn(run: dict, after: str):
-    """배울 기술이 기다리고 있으면 기술 잊기 화면(learn)으로. after: 끝나면 'reward' | 'next_wave'"""
+    """배울 기술이 기다리고 있으면 기술 잊기 화면(learn)으로. after: 끝나고 갈 단계 ('reward' | 'field' | 'battle') 또는 'next_wave'"""
     if learner(run) is not None:
         run["phase"] = "learn"
         run["after_learn"] = after
@@ -1136,7 +1159,7 @@ def resolve_learn(run: dict, forget: int | None, rng: random.Random | None = Non
             run["phase"] = "reward"
             msgs.extend(advance(run, rng))
         else:
-            run["phase"] = "reward"
+            run["phase"] = after   # 원래 하던 곳으로 (보상 / 필드 / 배틀)
     run["log"] = msgs
     return msgs
 
@@ -1210,6 +1233,9 @@ def wave_money(wave: int, boss: bool) -> int:
 
 def win(run: dict, rng: random.Random, caught: bool = False) -> list[str]:
     """상대를 쓰러뜨리거나 잡았을 때: 파티 전원 경험치, 돈, 보상"""
+    if run.get("mode") == "adventure":
+        from . import adventure
+        return adventure.after_ko(run, rng, caught)
     e = run["e"]
     msgs = []
     for m in run["party"]:
@@ -1222,7 +1248,7 @@ def win(run: dict, rng: random.Random, caught: bool = False) -> list[str]:
         _reset_battle_state(m)
         if WIN_HEAL and run.get("rule") != "hardcore" and m["hp"] < max_hp(m):
             m["hp"] = min(max_hp(m), m["hp"] + int(max_hp(m) * WIN_HEAL))
-    money = wave_money(run["wave"], e.get("boss", False)) * (2 if run.get("elite") else 1)
+    money = wave_money(run["wave"], e.get("boss", False))
     run["money"] = run.get("money", 0) + money
     msgs.append(f"💰 **₽{money:,}**을(를) 얻었다! (소지금 ₽{run['money']:,})")
     if lead(run)["hp"] <= 0 and alive(run):
@@ -1232,7 +1258,7 @@ def win(run: dict, rng: random.Random, caught: bool = False) -> list[str]:
         msgs.append(f"🏆 **{FINAL_WAVE}웨이브 클리어!** 전설을 {'잡았다' if caught else '쓰러뜨렸다'}!")
         return msgs
     run["phase"] = "reward"
-    run["rewards"] = roll_rewards(run, rng, 4 if run.get("elite") else 3)
+    run["rewards"] = roll_rewards(run, rng)
     run["next_e"] = {"wave": run["wave"] + 1, "mon": next_enemy(run, run["wave"] + 1, rng)}
     _maybe_learn(run, "reward")
     return msgs
@@ -1337,10 +1363,8 @@ def reroll_cost(run: dict) -> int:
 
 
 def shop_price(run: dict, item: str) -> int:
-    """웨이브가 오를수록 조금씩 비싸진다 (PokeRogue처럼). 떠돌이 상인을 만나면 30% 할인"""
+    """웨이브가 오를수록 조금씩 비싸진다 (PokeRogue처럼)"""
     price = ITEMS[item]["price"] * (1 + run["wave"] // BIOME_SIZE * 0.2)
-    if run.get("discount_wave") == run["wave"]:
-        price *= 0.7
     return int(price / 10) * 10
 
 
@@ -1502,74 +1526,13 @@ def choose_reward(run: dict, index: int, rng: random.Random | None = None, targe
     return msgs
 
 
-def path_due(run: dict) -> bool:
-    return run["wave"] % BIOME_SIZE in PATH_AFTER and run["wave"] + 1 < FINAL_WAVE
-
-
 def advance(run: dict, rng: random.Random) -> list[str]:
-    """보상 다음: 기술 잊기 → 갈림길 → 다음 웨이브"""
+    """보상 다음: 기술 잊기 → 다음 웨이브"""
     if learner(run) is not None:
         run["phase"] = "learn"
         run["after_learn"] = "next_wave"
         return []
-    if path_due(run) and not run.get("path_done") == run["wave"]:
-        r = _srng(run, rng, "path", run["wave"])
-        run["paths"] = r.sample(list(PATHS), 3)
-        run["phase"] = "path"
-        return ["🧭 갈림길이 나왔다! 어느 길로 갈까?"]
     return start_wave(run, rng)
-
-
-def resolve_path(run: dict, key: str, rng: random.Random | None = None) -> list[str]:
-    rng = rng or random.Random()
-    if run["phase"] != "path" or key not in run.get("paths", []):
-        raise ValueError("bad path")
-    r = _srng(run, rng, "path-event", run["wave"], key)
-    msgs = [f"{PATHS[key]['n']}(으)로 갔다."]
-    if key == "rest":
-        for m in run["party"]:
-            if m["hp"] > 0:
-                m["hp"] = min(max_hp(m), m["hp"] + max_hp(m) // 2)
-            else:
-                m["hp"] = max(1, max_hp(m) // 4)
-        msgs.append("모닥불 옆에서 쉬었다. 파티가 기운을 차렸다!")
-    elif key == "elite":
-        run["elite_next"] = True
-        msgs.append("강한 기운이 느껴진다...")
-    elif key == "market":
-        run["discount_wave"] = run["wave"] + 1
-        msgs.append("떠돌이 상인: \"다음에 들르면 30% 깎아 줄게!\"")
-    elif key == "train":
-        for m in run["party"]:
-            if m["hp"] > 0 and m["lv"] < level_cap(m):
-                msgs.extend(gain_exp(m, exp_to_next(m) // 2 + 1))
-        msgs.append("파티가 수련으로 경험치를 얻었다!")
-    elif key == "mystery":
-        roll = r.random()
-        if roll < 0.5:
-            bag_keys = [k for k, v in REWARDS.items() if v["kind"] == "bag"
-                        and (run.get("rule") != "noitems" or is_ball(v["item"][0]))]
-            k = r.choice(bag_keys)
-            item, cnt = REWARDS[k]["item"]
-            add_item(run, item, cnt)
-            msgs.append(f"상자 안에 {item_name(item)} {cnt}개가 들어 있었다!")
-        elif roll < 0.8:
-            v = nugget_value(run["wave"]) // 2
-            run["money"] += v
-            msgs.append(f"상자 안에 ₽{v:,}이(가) 들어 있었다!")
-        else:
-            run["ambush_next"] = True
-            msgs.append("앗! 상자는 함정이었다! 다음 상대가 기습해 온다!")
-    run["path_done"] = run["wave"]
-    run.pop("paths", None)
-    if learner(run) is not None:
-        run["phase"] = "learn"
-        run["after_learn"] = "next_wave"
-        run["log"] = msgs
-        return msgs
-    msgs.extend(start_wave(run, rng))
-    run["log"] = msgs
-    return msgs
 
 
 def skip_reward(run: dict, rng: random.Random | None = None) -> list[str]:
