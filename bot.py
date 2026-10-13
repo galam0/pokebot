@@ -127,6 +127,8 @@ class PokeBot(discord.Client):
         try:
             if custom_id.startswith("pr:"):
                 await handle_component(interaction, custom_id)
+            elif custom_id.startswith("pd:"):
+                await handle_dex(interaction, custom_id)
             elif custom_id.startswith("pm:"):
                 await handle_menu(interaction, custom_id)
         except Exception as e:
@@ -297,6 +299,40 @@ async def start_game(interaction: discord.Interaction, mode: str):
     await post_in_thread(interaction, title, content or None, embeds, view)
 
 
+# ---------- 그림 도감 (pd:<유저>:<세대|sel>:<쪽>) ----------
+async def show_dex(interaction: discord.Interaction, user, gen: int, page: int, send: bool, ephemeral: bool = False):
+    from game import scene as S
+    dex = storage.dex(user.id)
+    gen = max(1, min(9, gen))
+    page = max(0, min(page, S.dex_pages(gen) - 1))
+    file = None
+    try:
+        sids = [s for s in S.dex_page_sids(gen, page) if s in dex]
+        await sprites.ensure(sids=sids, timeout=1.5)
+        png = await asyncio.to_thread(S.dex_page, gen, page, dex, sprites.get_sprite, user.display_name)
+        file = discord.File(io.BytesIO(png), filename=ui.DEX_FILE)
+    except Exception as ex:
+        log.warning("도감 그림 실패: %s", short_error(ex))
+    embed, view = ui.dex_screen(user.id, user.display_name, dex, gen, page, image=file is not None)
+    if send:
+        kwargs = {"file": file} if file else {}
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=ephemeral, **kwargs)
+    else:
+        await interaction.response.edit_message(embeds=[embed], view=view, attachments=[file] if file else [])
+    nxt = [s for s in S.dex_page_sids(gen, page + 1) if s in dex] if page + 1 < S.dex_pages(gen) else []
+    sprites.prefetch(sids=nxt)
+
+
+async def handle_dex(interaction: discord.Interaction, custom_id: str):
+    _, owner, gen, page = custom_id.split(":")[:4]
+    if int(owner) != interaction.user.id:
+        await interaction.response.send_message("다른 트레이너의 도감이에요. `/도감`으로 내 도감을 열어 보세요.", ephemeral=True)
+        return
+    if gen == "sel":
+        gen, page = (interaction.data.get("values") or ["1"])[0], "0"
+    await show_dex(interaction, interaction.user, int(gen), int(page), send=False)
+
+
 # ---------- 메뉴 버튼 (pm:<유저 또는 0>:<동작>) ----------
 async def handle_menu(interaction: discord.Interaction, custom_id: str):
     _, owner, act = custom_id.split(":")[:3]
@@ -336,7 +372,7 @@ async def menu_action(interaction: discord.Interaction, act: str):
                    content=None if len(runs) == 1 else f"진행 중인 게임이 {len(runs)}개라 {ui.MODE_KO[mode]} 게임을 불러왔어요. "
                                                        "다른 게임은 `/이어하기`에서 골라 주세요.")
     elif act == "dex":
-        await interaction.response.send_message(embed=ui.dex_embed(name, storage.dex(uid)), ephemeral=True)
+        await show_dex(interaction, user, 1, 0, send=True, ephemeral=True)
     elif act == "records":
         await send_records(interaction, ephemeral=True)
     elif act == "help":
@@ -705,8 +741,7 @@ async def my_pokemon(interaction: discord.Interaction):
 
 @bot.tree.command(name="도감", description="지금까지 잡은 포켓몬 도감을 봐요")
 async def dex_cmd(interaction: discord.Interaction):
-    await interaction.response.send_message(embed=ui.dex_embed(interaction.user.display_name,
-                                                               storage.dex(interaction.user.id)))
+    await show_dex(interaction, interaction.user, 1, 0, send=True)
 
 
 async def send_records(interaction: discord.Interaction, ephemeral: bool = False):

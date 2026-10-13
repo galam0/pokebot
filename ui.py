@@ -770,6 +770,42 @@ def help_embed() -> discord.Embed:
     return e
 
 
+DEX_FILE = "dex.png"
+
+
+def dex_screen(uid: int, trainer: str, dex: dict[int, int], gen: int, page: int,
+               image: bool = True) -> tuple[discord.Embed, discord.ui.View]:
+    """그림 도감: 세대 고르기 + 쪽 넘기기. 버튼 custom_id: pd:<유저>:<세대>:<쪽>"""
+    from game import scene
+    gen = max(1, min(9, gen))
+    pages = scene.dex_pages(gen)
+    page = max(0, min(page, pages - 1))
+    region, a, b = scene.GENS[gen - 1]
+    got = sum(1 for s in range(a, b + 1) if s in dex)
+    e = discord.Embed(title=f"📖 {trainer}의 도감 · {gen}세대 {region}",
+                      description=f"이 지방 **{got}/{b - a + 1}** · 전체 **{len(dex)}/{len(D.SPECIES)}**종 · "
+                                  f"{page + 1}/{pages}쪽", color=0xD83C3C)
+    if image:
+        e.set_image(url=f"attachment://{DEX_FILE}")
+    else:
+        names = [f"`{s:03d}` {D.name(s) if s in dex else '???'}" for s in scene.dex_page_sids(gen, page)]
+        e.add_field(name="목록", value="\n".join(names)[:1024], inline=False)
+    view = discord.ui.View(timeout=None)
+    opts = []
+    for i, (r, lo, hi) in enumerate(scene.GENS, 1):
+        n = sum(1 for s in range(lo, hi + 1) if s in dex)
+        opts.append(discord.SelectOption(label=f"{i}세대 · {r}", value=str(i), description=f"{n}/{hi - lo + 1}",
+                                         default=i == gen))
+    view.add_item(discord.ui.Select(custom_id=f"pd:{uid}:sel:0", placeholder="세대 고르기", options=opts, row=0))
+    view.add_item(discord.ui.Button(label="◀ 이전", style=discord.ButtonStyle.secondary, row=1,
+                                    custom_id=f"pd:{uid}:{gen}:{page - 1}", disabled=page == 0))
+    view.add_item(discord.ui.Button(label=f"{page + 1} / {pages}", style=discord.ButtonStyle.secondary, row=1,
+                                    custom_id=f"pd:{uid}:{gen}:{page}:x", disabled=True))
+    view.add_item(discord.ui.Button(label="다음 ▶", style=discord.ButtonStyle.secondary, row=1,
+                                    custom_id=f"pd:{uid}:{gen}:{page + 1}", disabled=page >= pages - 1))
+    return e, _frozen(view)
+
+
 def dex_embed(trainer: str, dex: dict[int, int]) -> discord.Embed:
     total = len(D.SPECIES)
     e = discord.Embed(title=f"📖 {trainer}의 도감", color=0x3BA55D,
