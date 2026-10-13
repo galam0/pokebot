@@ -1,3 +1,5 @@
+import asyncio
+import logging
 import os
 
 import aiohttp
@@ -10,6 +12,39 @@ from dotenv import load_dotenv
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 DB_PATH = os.getenv("DB_PATH", "pokebot.db")
+
+# print 대신 logging 사용 → Render 로그에 바로 찍혀요
+log = logging.getLogger("pokebot")
+
+BUSY_MSG = "디스코드 연결이 잠시 불안정해요. 잠깐 뒤에 다시 시도해 주세요."
+
+
+def short_error(error: Exception) -> str:
+    """Cloudflare 차단 시 HTML 페이지 전체가 로그에 찍히지 않도록 첫 줄만 남긴다."""
+    return str(error).split("\n", 1)[0][:200]
+
+
+async def safe_edit(interaction: discord.Interaction, **kwargs):
+    """429(요청 제한/일시 차단)면 잠깐 기다렸다가 다시 시도한다."""
+    for attempt in range(3):
+        try:
+            return await interaction.edit_original_response(**kwargs)
+        except discord.HTTPException as e:
+            if e.status == 429 and attempt < 2:
+                await asyncio.sleep(3 * (attempt + 1))
+                continue
+            raise
+
+
+async def notify_failure(interaction: discord.Interaction):
+    """처리에 실패했을 때 사용자에게 안내한다. 이것도 막혔으면 조용히 넘어간다."""
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(BUSY_MSG, ephemeral=True)
+        else:
+            await interaction.response.send_message(BUSY_MSG, ephemeral=True)
+    except Exception:
+        pass
 
 # 세대별 스타팅 포켓몬 (전국도감 번호: 풀, 불꽃, 물 순서)
 STARTERS = {
@@ -124,6 +159,10 @@ class OwnerView(discord.ui.View):
             return False
         return True
 
+    async def on_error(self, interaction: discord.Interaction, error: Exception, item):
+        log.warning("선택창 처리 실패 (%s): %s", type(item).__name__, short_error(error))
+        await notify_failure(interaction)
+
 
 class GenSelect(discord.ui.Select):
     def __init__(self):
@@ -135,7 +174,7 @@ class GenSelect(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
         ids = STARTERS[self.values[0]]
-        infos = [await get_info(i) for i in ids]
+        infos = await asyncio.gather(*(get_info(i) for i in ids))
 
         embeds = [
             discord.Embed(title=info["name"], color=discord.Color.blurple()).set_thumbnail(
@@ -144,7 +183,8 @@ class GenSelect(discord.ui.Select):
             for info in infos
         ]
         view = StarterView(interaction.user.id, ids, infos)
-        await interaction.edit_original_response(
+        await safe_edit(
+            interaction,
             content=f"**{self.values[0]}** 스타팅 포켓몬이에요. 함께할 파트너를 골라주세요!",
             embeds=embeds,
             view=view,
@@ -168,8 +208,8 @@ class StarterButton(discord.ui.Button):
 
         # 중복 선택 방지 (버튼을 연타하거나 창을 여러 개 연 경우)
         if await has_any_pokemon(interaction.user.id):
-            await interaction.edit_original_response(
-                content="이미 파트너 포켓몬이 있어요!", embeds=[], view=None
+            await safe_edit(
+                interaction, content="이미 파트너 포켓몬이 있어요!", embeds=[], view=None
             )
             return
 
@@ -180,7 +220,7 @@ class StarterButton(discord.ui.Button):
             color=discord.Color.green(),
         )
         embed.set_image(url=self.info["image"])
-        await interaction.edit_original_response(content=None, embeds=[embed], view=None)
+        await safe_edit(interaction, content=None, embeds=[embed], view=None)
 
 
 class StarterView(OwnerView):
@@ -225,26 +265,33 @@ class PokeBot(discord.Client):
         return len(synced)
 
     async def on_ready(self):
-        print(f"로그인: {self.user} / 서버 {len(self.guilds)}곳")
+        log.info("로그인: %s / 서버 %d곳", self.user, len(self.guilds))
         if getattr(self, "_synced", False):  # 재연결 때마다 다시 하지 않음
             return
         self._synced = True
         for guild in self.guilds:
             try:
                 count = await self.sync_guild(guild)
-                print(f"명령어 {count}개 동기화: {guild.name}")
+                log.info("명령어 %d개 동기화: %s", count, guild.name)
             except Exception as e:  # 한 서버가 실패해도 나머지는 계속
-                print(f"명령어 동기화 실패 ({guild.name}): {e}")
+                log.warning("명령어 동기화 실패 (%s): %s", guild.name, short_error(e))
 
     async def on_guild_join(self, guild: discord.Guild):
         try:
             count = await self.sync_guild(guild)
-            print(f"새 서버 참가: {guild.name} → 명령어 {count}개 등록")
+            log.info("새 서버 참가: %s → 명령어 %d개 등록", guild.name, count)
         except Exception as e:
-            print(f"새 서버 명령어 등록 실패 ({guild.name}): {e}")
+            log.warning("새 서버 명령어 등록 실패 (%s): %s", guild.name, short_error(e))
 
 
 bot = PokeBot()
+
+
+@bot.tree.error
+async def on_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    cmd = interaction.command.name if interaction.command else "?"
+    log.warning("/%s 처리 실패: %s", cmd, short_error(getattr(error, "original", error)))
+    await notify_failure(interaction)
 
 
 @bot.tree.command(name="스타팅", description="스타팅 포켓몬을 골라 모험을 시작해요")
