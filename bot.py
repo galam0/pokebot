@@ -9,7 +9,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
-GUILD_ID = os.getenv("GUILD_ID")  # 개발 중 명령어를 즉시 반영하고 싶을 때만 설정
 DB_PATH = os.getenv("DB_PATH", "pokebot.db")
 
 # 세대별 스타팅 포켓몬 (전국도감 번호: 풀, 불꽃, 물 순서)
@@ -217,12 +216,11 @@ class PokeBot(discord.Client):
     async def setup_hook(self):
         await start_health_server()
         await init_db()
-        if GUILD_ID:
-            guild = discord.Object(id=int(GUILD_ID))
-            self.tree.copy_global_to(guild=guild)
-            await self.tree.sync(guild=guild)
-        else:
+        # 모든 서버에 적용되는 전역 명령어로 등록 (반영까지 최대 1시간 걸릴 수 있어요)
+        try:
             await self.tree.sync()
+        except Exception as e:
+            print(f"명령어 등록 실패: {e}")  # 실패해도 봇은 계속 켜져 있게 해요
 
 
 bot = PokeBot()
