@@ -24,7 +24,23 @@ GEN = {name: i + 1 for i, name in enumerate(REGIONS)}
 TYPE_COLOR = {10: 0xEE8130, 11: 0x6390F0, 12: 0x7AC74C}
 
 
-def cid(uid: int, ver: int, act: str, arg: str | int = "") -> str:
+MODE_PREFIX = {"normal": "", "daily": "d", "challenge": "c"}
+MODE_KO = {"normal": "일반", "daily": "📅 데일리", "challenge": "🏆 주간 챌린지"}
+
+
+def slot_of(uid: int, mode: str = "normal") -> str:
+    """버튼 주인 표시: 일반 '123', 데일리 'd123', 챌린지 'c123'"""
+    return f"{MODE_PREFIX[mode]}{uid}"
+
+
+def parse_slot(slot: str) -> tuple[int, str]:
+    for mode, pre in MODE_PREFIX.items():
+        if pre and slot.startswith(pre):
+            return int(slot[len(pre):]), mode
+    return int(slot), "normal"
+
+
+def cid(uid, ver: int, act: str, arg: str | int = "") -> str:
     return f"pr:{uid}:{ver}:{act}" + (f":{arg}" if arg != "" else "")
 
 
@@ -61,7 +77,7 @@ def mon_head(mon: dict) -> str:
 
 
 # ---------- 스타팅 선택 ----------
-def region_screen(uid: int) -> tuple[str, list[discord.Embed], discord.ui.View]:
+def region_screen(uid, dex_count: int = 0) -> tuple[str, list[discord.Embed], discord.ui.View]:
     view = discord.ui.View(timeout=None)
     select = discord.ui.Select(
         custom_id=cid(uid, 0, "region"), placeholder="지방을 골라주세요",
@@ -75,10 +91,65 @@ def region_screen(uid: int) -> tuple[str, list[discord.Embed], discord.ui.View]:
         description=("함께 떠날 스타팅 포켓몬을 고르세요.\n\n"
                      f"• 야생 포켓몬을 이기며 웨이브를 하나씩 넘어가요. **{E.FINAL_WAVE}웨이브**가 마지막이에요.\n"
                      f"• {E.BIOME_SIZE}웨이브마다 👑 보스가 나오고, 보스를 넘기면 새 지역에서 회복돼요.\n"
-                     "• 이길 때마다 보상을 하나 골라요. 쓰러지면 게임이 끝나요."),
+                     "• 이길 때마다 보상을 하나 골라요. 쓰러지면 게임이 끝나요.\n"
+                     "• 잡은 포켓몬은 도감에 남고, 다음 게임부터 스타팅으로 고를 수 있어요."),
         color=discord.Color.blurple(),
     )
+    view.add_item(discord.ui.Button(label=f"도감에서 고르기 ({dex_count}종)", emoji="📖", style=discord.ButtonStyle.success,
+                                    custom_id=cid(uid, 0, "dexpick", 0), disabled=dex_count == 0, row=1))
     return "", [embed], _frozen(view)
+
+
+DEX_PAGE = 25
+
+
+def dex_pick_screen(uid, sids: list[int], page: int = 0) -> tuple[str, list[discord.Embed], discord.ui.View]:
+    """도감에서 해금된 포켓몬(진화 전 모습)을 스타팅으로 고르기"""
+    pages = max(1, (len(sids) + DEX_PAGE - 1) // DEX_PAGE)
+    page = max(0, min(page, pages - 1))
+    chunk = sids[page * DEX_PAGE:(page + 1) * DEX_PAGE]
+    view = discord.ui.View(timeout=None)
+    view.add_item(discord.ui.Select(
+        custom_id=cid(uid, 0, "starter"), placeholder=f"스타팅으로 고를 포켓몬 ({page + 1}/{pages}쪽)",
+        options=[discord.SelectOption(label=f"No.{s} {D.name(s)}", value=str(s),
+                                      description=f"{D.type_text(s)} · 종족값 {D.bst(s)}") for s in chunk]))
+    view.add_item(discord.ui.Button(label="이전", style=discord.ButtonStyle.secondary, row=1,
+                                    custom_id=cid(uid, 0, "dexpick", page - 1), disabled=page == 0))
+    view.add_item(discord.ui.Button(label="다음", style=discord.ButtonStyle.secondary, row=1,
+                                    custom_id=cid(uid, 0, "dexpick", page + 1), disabled=page >= pages - 1))
+    view.add_item(discord.ui.Button(label="지방에서 고르기", style=discord.ButtonStyle.secondary, row=1,
+                                    custom_id=cid(uid, 0, "regions")))
+    embed = discord.Embed(title="📖 도감에서 스타팅 고르기",
+                          description=(f"지금까지 잡은 포켓몬 {len(sids)}종을 고를 수 있어요 (진화 전 첫 모습, Lv.5로 시작).\n"
+                                       "강한 포켓몬일수록 초반이 쉬워지지만, 웨이브는 똑같이 어려워져요."),
+                          color=0x3BA55D)
+    return "", [embed], _frozen(view)
+
+
+def mode_start_screen(uid, mode: str, seed: str, starters: list[int]) -> tuple[str, list[discord.Embed], discord.ui.View]:
+    """데일리·주간 챌린지 시작: 정해진 스타팅 3마리 중 고르기"""
+    if mode == "daily":
+        title = f"📅 데일리 · {seed}"
+        desc = ("오늘은 모두가 **같은 상대, 같은 보상, 같은 갈림길**로 도전해요. 하루에 한 번만 할 수 있어요.\n"
+                "가장 멀리 간 웨이브로 오늘의 랭킹이 정해져요.")
+    else:
+        rule, mono = E.weekly_rules(seed)
+        rule_text = E.RULES[rule] + (f" (**{D.TYPE_KO[mono]}** 타입)" if mono else "")
+        title = f"🏆 주간 챌린지 · {seed}"
+        desc = (f"이번 주 규칙: **{rule_text}**\n"
+                "모두가 같은 상대와 보상으로 도전하고, 이번 주에 한 번만 할 수 있어요. 주간 랭킹을 겨뤄요.")
+    embeds = [discord.Embed(title=title, description=desc, color=0xF1C40F)]
+    view = discord.ui.View(timeout=None)
+    for sid in starters:
+        st = D.SPECIES[sid]["s"]
+        e = discord.Embed(title=D.name(sid), color=TYPE_COLOR.get(D.types(sid)[0], 0x5865F2),
+                          description=(f"{D.type_text(sid)} 타입 · 종족값 합계 {sum(st)}\n"
+                                       f"HP {st[0]} · 공격 {st[1]} · 방어 {st[2]} · 특공 {st[3]} · 특방 {st[4]} · 스피드 {st[5]}"))
+        e.set_thumbnail(url=D.artwork(sid))
+        embeds.append(e)
+        view.add_item(discord.ui.Button(label=D.name(sid), style=discord.ButtonStyle.primary,
+                                        custom_id=cid(uid, 0, "starter", sid)))
+    return "", embeds, _frozen(view)
 
 
 def starter_screen(uid: int, region: str) -> tuple[str, list[discord.Embed], discord.ui.View]:
@@ -127,13 +198,20 @@ def _btn(view, label, uid, ver, act, arg="", style=B.secondary, emoji=None, row=
 def _base_embed(trainer: str, run: dict, title: str | None = None, color: int | None = None) -> discord.Embed:
     wave, phase = run["wave"], run["phase"]
     boss = E.is_boss_wave(wave)
-    title = title or (f"웨이브 {wave}/{E.FINAL_WAVE} · {E.biome(wave)}" + (" · 👑 보스전" if boss else ""))
+    title = title or (f"웨이브 {wave}/{E.FINAL_WAVE} · {E.biome(wave)}" + (" · 👑 보스전" if boss else "")
+                      + (" · ⚔️ 강적" if run.get("elite") and phase == "battle" else ""))
+    mode = run.get("mode", "normal")
+    if mode != "normal":
+        title = f"{MODE_KO[mode]} · " + title
     color = color if color is not None else {"over": 0x4F545C, "clear": 0xF1C40F}.get(phase, 0xE74C3C if boss else 0x5865F2)
     log = run.get("log") or []
     desc = josa("\n".join(log[-16:])) or "​"
     embed = discord.Embed(title=title, description=desc[:4000], color=color)
     p = E.lead(run)
     embed.set_author(name=f"{trainer} 트레이너 · ₽{run.get('money', 0):,}", icon_url=D.sprite(p["sid"]))
+    if run.get("rule"):
+        embed.set_footer(text="이번 주 규칙: " + E.RULES[run["rule"]]
+                         + (f" ({D.TYPE_KO[run['mono']]} 타입)" if run.get("mono") else ""))
     return embed
 
 
@@ -229,13 +307,27 @@ def battle_screen(uid: int, trainer: str, run: dict, image: bool = True) -> Scre
         _btn(view, f"{new['n']} 배우지 않기", uid, ver, "noforget", style=B.danger, row=2)
         return Screen(embed, _frozen(view), "summary", {"index": li})
 
+    if phase == "path":
+        embed.title = "🧭 갈림길이 나왔어요"
+        if image:
+            embed.set_image(url=f"attachment://{SCENE_FILE}")
+        embed.add_field(name="어느 길로 갈까요?", value="\n".join(
+            f"**{E.PATHS[k]['n']}** — {E.PATHS[k]['d']}" for k in run.get("paths", [])), inline=False)
+        for k in run.get("paths", []):
+            _btn(view, E.PATHS[k]["n"], uid, ver, "path", k, style=B.primary)
+        _btn(view, "파티", uid, ver, "party", emoji="📋", row=1)
+        return Screen(embed, _frozen(view), "path")
+
     if phase == "reward":
         _image(embed, run, image)
         for i, key in enumerate(run["rewards"]):
             _btn(view, E.reward_info(key, run)["n"], uid, ver, "reward", i, style=B.success, emoji="🎁", row=0)
+        if run.get("elite"):
+            embed.title += " · ⚔️ 강적 보상"
         cost = E.reroll_cost(run)
         _btn(view, f"다시 뽑기 ₽{cost:,}", uid, ver, "reroll", emoji="🎲", row=1, disabled=run["money"] < cost)
-        _btn(view, "상점", uid, ver, "shop", emoji="🛒", row=1)
+        _btn(view, "상점" + (" (30% 할인)" if run.get("discount_wave") == run["wave"] else ""), uid, ver, "shop",
+             emoji="🛒", row=1, disabled=not E.shop_open(run))
         _btn(view, "가방", uid, ver, "bag", emoji="🎒", row=1)
         _btn(view, "파티", uid, ver, "party", emoji="📋", row=1)
         _btn(view, "넘어가기", uid, ver, "skip", row=2)
@@ -307,7 +399,11 @@ def bag_screen(uid: int, trainer: str, run: dict, cat: str | None = None, image:
         ok = E.item_usable_now(run, item) and (E.is_ball(item) or bool(E.item_targets(run, item)))
         label = f"{E.item_name(item)} x{cnt}"
         if E.is_ball(item) and in_battle:
-            label += f" ({int(E.catch_chance(run, item) * 100)}%)"
+            if E.allowed(run, run["e"]["sid"]):
+                label += f" ({int(E.catch_chance(run, item) * 100)}%)"
+            else:
+                ok = False
+                label += " (규칙상 못 잡아요)"
         _btn(view, label, uid, ver, "ball" if E.is_ball(item) else "item", item,
              style=B.success if ok else B.secondary, row=1 + n // 5, disabled=not ok)
     embed.add_field(name="아이템", value="\n".join(lines)[:1024] or "가방이 비어 있어요.", inline=False)
@@ -466,6 +562,83 @@ def mon_detail(trainer: str, run: dict, index: int | None = None, image: bool = 
     else:
         e.set_thumbnail(url=D.artwork(p["sid"]))
     e.set_footer(text=f"{trainer} 트레이너 · 웨이브 {run['wave']} · 스타팅 {D.name(run['starter'])}")
+    return e
+
+
+# ---------- 메뉴 ----------
+MENU = [("new", "새 게임", "🎮"), ("daily", "데일리", "📅"), ("challenge", "주간 챌린지", "🏆"),
+        ("resume", "이어하기", "▶️"), ("dex", "도감", "📖"), ("records", "기록·랭킹", "📊"), ("help", "도움말", "❔")]
+
+
+def menu_view(uid: int) -> discord.ui.View:
+    """uid=0 이면 누구나 누를 수 있는 공용 패널"""
+    view = discord.ui.View(timeout=None)
+    for i, (act, label, emoji) in enumerate(MENU):
+        view.add_item(discord.ui.Button(label=label, emoji=emoji, row=i // 4,
+                                        style=discord.ButtonStyle.primary if act == "new" else discord.ButtonStyle.secondary,
+                                        custom_id=f"pm:{uid}:{act}"))
+    return _frozen(view)
+
+
+def menu_embed(public: bool = False) -> discord.Embed:
+    e = discord.Embed(title="🎮 포켓몬 로그라이크", color=0x5865F2, description=(
+        "야생 포켓몬을 잡고 키우며 100웨이브까지 도전하는 PokeRogue식 게임이에요.\n\n"
+        "**새 게임** 스타팅을 골라 시작 (잡은 포켓몬은 도감에 남아 다음 스타팅으로 쓸 수 있어요)\n"
+        "**데일리** 오늘 모두 같은 조건으로 하루 한 번 도전\n"
+        "**주간 챌린지** 이번 주 특별 규칙으로 도전\n"
+        "**이어하기** 진행 중인 게임 화면 다시 불러오기"))
+    if public:
+        e.set_footer(text="누구나 버튼을 눌러 시작할 수 있어요. 게임은 전용 스레드에서 진행돼요.")
+    return e
+
+
+def help_embed() -> discord.Embed:
+    e = discord.Embed(title="❔ 도움말", color=0x5865F2)
+    e.add_field(name="배틀", value="기술 버튼으로 공격해요. 초록 버튼은 효과가 굉장한 기술이에요. "
+                "🎒 가방(볼·회복약), 🔄 교체는 턴을 써요. 기술마다 PP가 있어요.", inline=False)
+    e.add_field(name="웨이브", value=f"{E.BIOME_SIZE}웨이브마다 👑 보스가 나와요. 보스는 HP 보호막이 여러 칸이고, "
+                "칸이 깨질 때마다 강해져요. 보스를 넘기면 새 지역에서 파티가 회복돼요.", inline=False)
+    e.add_field(name="보상·상점·갈림길", value="이길 때마다 보상을 하나 골라요. 돈으로 다시 뽑거나 상점에서 살 수 있어요. "
+                "가끔 갈림길에서 쉼터·강적·상인·수상한 상자·수련장 중 길을 골라요.", inline=False)
+    e.add_field(name="포획·도감", value="야생 포켓몬은 볼로 잡아 파티(최대 6)에 넣어요. 잡은 포켓몬은 도감에 영구로 남고, "
+                "새 게임에서 스타팅으로 고를 수 있어요.", inline=False)
+    e.add_field(name="성장", value="기술머신, 진화의 돌, 지닌 물건, 이상한사탕, 비타민으로 강해져요. "
+                "새 기술이 5번째면 잊을 기술을 골라요.", inline=False)
+    return e
+
+
+def dex_embed(trainer: str, dex: dict[int, int]) -> discord.Embed:
+    total = len(D.SPECIES)
+    e = discord.Embed(title=f"📖 {trainer}의 도감", color=0x3BA55D,
+                      description=f"잡은 포켓몬 **{len(dex)}** / {total}종 · 스타팅으로 고를 수 있는 포켓몬 "
+                                  f"**{len({E.root_species(s) for s in dex})}**종")
+    gens = [(1, 151), (152, 251), (252, 386), (387, 493), (494, 649), (650, 721), (722, 809), (810, 905), (906, 1025)]
+    lines = []
+    for g, (a, b) in enumerate(gens, 1):
+        n = sum(1 for s in dex if a <= s <= b)
+        lines.append(f"{g}세대 `{bar(n, b - a + 1, 8)}` {n}/{b - a + 1}")
+    e.add_field(name="세대별", value="\n".join(lines), inline=True)
+    by_type = {t: 0 for t in D.TYPE_KO}
+    for s in dex:
+        for t in D.types(s):
+            by_type[t] += 1
+    top = sorted(by_type.items(), key=lambda kv: -kv[1])[:9]
+    e.add_field(name="많이 잡은 타입", value="\n".join(f"{D.TYPE_KO[t]} {n}" for t, n in top if n) or "-", inline=True)
+    most = sorted(dex.items(), key=lambda kv: (-kv[1], kv[0]))[:10]
+    if most:
+        e.add_field(name="자주 잡은 포켓몬", value=", ".join(f"{D.name(s)}({n})" for s, n in most), inline=False)
+    return e
+
+
+def period_board_embed(title: str, rows: list[dict], me: int, extra: str = "") -> discord.Embed:
+    e = discord.Embed(title=title, color=0xF1C40F, description=extra or None)
+    medals = ["🥇", "🥈", "🥉"]
+    lines = []
+    for i, r in enumerate(rows):
+        who = f"**{r['name']}**" if r["user_id"] == me else r["name"]
+        lines.append(f"{medals[i] if i < 3 else f'{i + 1}.'} {who} — {r['wave']}웨이브"
+                     + (f" · {D.name(r['final'])}" if r.get("final") else "") + (" 🏆" if r.get("clear") else ""))
+    e.add_field(name="랭킹", value="\n".join(lines) or "아직 기록이 없어요.", inline=False)
     return e
 
 

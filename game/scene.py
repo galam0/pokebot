@@ -331,18 +331,31 @@ def battle(run: dict, get_sprite: SpriteGetter | None = None, message: list[str]
 
     # 상대 정보창
     if e:
-        _panel(d, (6, 8, 146, 44))
+        _panel(d, (6, 8, 146, 48 if e.get("bars", 0) > 1 else 44))
         name = D.name(e["sid"])
         _text(d, (12, 12), name, font=BOLD)
         x = 12 + _tw(name, BOLD) + 4
         if e.get("boss"):
             _text(d, (x, 12), "BOSS", font=BOLD, fill=(200, 48, 48))
             x += _tw("BOSS", BOLD) + 4
+        elif run.get("elite"):
+            _text(d, (x, 12), "강적", font=BOLD, fill=(200, 96, 24))
+            x += _tw("강적", BOLD) + 4
         _status_tag(d, x, 12, e.get("status"))
         lv = f"Lv.{e['lv']}"
         _text(d, (140 - _tw(lv), 12), lv)
         r = e["hp"] / E.max_hp(e)
         _hp_gauge(d, 12, 28, 128, r)
+        bars = e.get("bars", 0)
+        if bars > 1:   # 보스 보호막 칸: 게이지에 칸 나눔 + 남은 보호막 방패
+            x0, x1 = 12 + 16, 12 + 128 - 2
+            for k in range(1, bars):
+                tx = x0 + round((x1 - x0) * k / bars)
+                d.line((tx, 29, tx, 36), fill=(248, 248, 240))
+            for k in range(e.get("bars_left", 1) - 1):
+                sx = 14 + k * 9
+                d.polygon([(sx, 38), (sx + 6, 38), (sx + 6, 41), (sx + 3, 44), (sx, 41)], fill=(96, 160, 232),
+                          outline=(40, 64, 120))
 
     # 내 정보창 (+ 파티 볼)
     _panel(d, (172, 98, 314, 142))
@@ -505,38 +518,110 @@ def _wrap(s: str, width: int) -> list[str]:
     return out
 
 
+def _cards(im, d, entries: list[dict], y0: int = 30, y1: int = 120):
+    """카드 여러 장 (보상·갈림길). entry: {"n": 이름, "d": 설명, "icon": 이미지|None, "draw": 그리기 함수|None}"""
+    n = max(1, len(entries))
+    gap = 5
+    w = (W - 16 - gap * (n - 1)) // n
+    for i, en in enumerate(entries):
+        x0 = 8 + i * (w + gap)
+        cx = x0 + w // 2
+        _panel(d, (x0, y0, x0 + w, y1), fill=(248, 248, 240))
+        d.rectangle((x0 + 1, y0 + 1, x0 + w - 1, y0 + 12), fill=(232, 224, 200))
+        _text(d, (x0 + 5, y0 + 1), f"{i + 1}", font=BOLD, fill=(160, 120, 40))
+        icon = en.get("icon")
+        if icon is not None:
+            icon = icon.convert("RGBA")
+            icon = icon.resize((icon.width * 2, icon.height * 2), Image.NEAREST)
+            im.paste(icon, (cx - icon.width // 2, y0 + 40 - icon.height // 2), icon)
+        elif en.get("draw"):
+            en["draw"](d, cx, y0 + 40)
+        else:
+            d.ellipse((cx - 12, y0 + 20, cx + 12, y0 + 44), fill=(232, 200, 120), outline=(160, 120, 40))
+            _text(d, (cx - 3, y0 + 26), "?", font=BOLD, fill=(120, 80, 24))
+        name = en["n"]
+        while _tw(name, BOLD) > w - 6 and len(name) > 2:
+            name = name[:-1]
+        _text(d, (cx - _tw(name, BOLD) // 2, y0 + 54), name, font=BOLD)
+        desc = en["d"].replace(" (", "\n(").split("\n") if " (" in en["d"] else _wrap(en["d"], w - 8)
+        for j, line in enumerate(desc[:2]):
+            while _tw(line) > w - 6 and len(line) > 2:
+                line = line[:-1]
+            _text(d, (cx - _tw(line) // 2, y0 + 67 + j * 11), line, fill=(88, 88, 104))
+
+
 def rewards(run: dict, get_sprite: SpriteGetter | None = None, get_item: ItemGetter | None = None) -> bytes:
     im, d = _canvas()
     _background(d, E.biome(run["wave"]))
     d.rectangle((0, 0, W, 22), fill=(40, 56, 88))
-    _text(d, (8, 5), f"WAVE {run['wave']} 클리어!  보상을 하나 고르세요", font=BOLD, fill=(255, 232, 120), shadow=(16, 24, 40))
+    title = f"WAVE {run['wave']} 클리어!  " + ("강적 보상! 4개 중 하나" if run.get("elite") else "보상을 하나 고르세요")
+    _text(d, (8, 5), title, font=BOLD, fill=(255, 232, 120), shadow=(16, 24, 40))
     money = f"₽{run.get('money', 0):,}"
     _text(d, (W - _tw(money, BOLD) - 8, 5), money, font=BOLD, fill=(255, 255, 255), shadow=(16, 24, 40))
-    for i, key in enumerate(run["rewards"][:3]):
+    entries = []
+    for key in run["rewards"][:4]:
         r = E.reward_info(key, run)
-        x0 = 8 + i * 103
-        _panel(d, (x0, 30, x0 + 98, 120), fill=(248, 248, 240))
-        d.rectangle((x0 + 1, 31, x0 + 97, 42), fill=(232, 224, 200))
-        _text(d, (x0 + 5, 31), f"{i + 1}", font=BOLD, fill=(160, 120, 40))
         icon = None
         if get_item:
             try:
                 icon = get_item(reward_icon(key))
             except Exception:
                 icon = None
-        if icon is not None:
-            icon = icon.convert("RGBA")
-            icon = icon.resize((icon.width * 2, icon.height * 2), Image.NEAREST)
-            im.paste(icon, (x0 + 49 - icon.width // 2, 70 - icon.height // 2), icon)
-        else:
-            d.ellipse((x0 + 37, 50, x0 + 61, 74), fill=(232, 200, 120), outline=(160, 120, 40))
-            _text(d, (x0 + 46, 56), "?", font=BOLD, fill=(120, 80, 24))
-        name = r["n"]
-        _text(d, (x0 + 49 - _tw(name, BOLD) // 2, 84), name, font=BOLD)
-        desc = r["d"].replace(" (", "\n(").split("\n") if " (" in r["d"] else _wrap(r["d"], 90)
-        for j, line in enumerate(desc[:2]):
-            _text(d, (x0 + 49 - _tw(line) // 2, 97 + j * 11), line, fill=(88, 88, 104))
+        entries.append({"n": r["n"], "d": r["d"], "icon": icon})
+    _cards(im, d, entries)
     # 아래: 파티 6칸
+    _party_strip(im, d, run, get_sprite, 8, 126)
+    return _finish(im, d)
+
+
+# ---------- 갈림길 ----------
+def _icon_rest(d, x, y):
+    d.polygon([(x - 10, y + 8), (x + 10, y + 8), (x, y - 12)], fill=(240, 120, 40), outline=(160, 64, 24))
+    d.polygon([(x - 5, y + 8), (x + 5, y + 8), (x, y - 3)], fill=(255, 220, 80))
+    d.rectangle((x - 12, y + 8, x + 12, y + 11), fill=(120, 80, 48))
+
+
+def _icon_elite(d, x, y):
+    for sgn in (-1, 1):
+        d.line((x - 10 * sgn, y - 10, x + 10 * sgn, y + 10), fill=(160, 168, 184), width=3)
+        d.line((x - 6 * sgn, y + 2, x - 2 * sgn, y + 6), fill=(120, 80, 48), width=3)
+    d.ellipse((x - 3, y - 3, x + 3, y + 3), fill=(200, 48, 48))
+
+
+def _icon_market(d, x, y):
+    d.rounded_rectangle((x - 11, y - 6, x + 11, y + 11), radius=3, fill=(200, 152, 72), outline=(120, 80, 32))
+    d.arc((x - 6, y - 14, x + 6, y - 2), 180, 360, fill=(120, 80, 32), width=2)
+    _text(d, (x - 4, y - 3), "₽", fill=(255, 248, 220))
+
+
+def _icon_mystery(d, x, y):
+    d.rectangle((x - 11, y - 8, x + 11, y + 10), fill=(136, 88, 168), outline=(72, 40, 96))
+    d.rectangle((x - 11, y - 8, x + 11, y - 3), fill=(168, 120, 200), outline=(72, 40, 96))
+    _text(d, (x - 3, y - 2), "?", font=BOLD, fill=(255, 232, 120))
+
+
+def _icon_train(d, x, y):
+    d.rectangle((x - 9, y - 1, x + 9, y + 1), fill=(96, 96, 104))
+    for sx in (-12, 8):
+        d.rectangle((x + sx, y - 7, x + sx + 4, y + 7), fill=(64, 64, 72))
+
+
+PATH_ICON = {"rest": _icon_rest, "elite": _icon_elite, "market": _icon_market, "mystery": _icon_mystery,
+             "train": _icon_train}
+
+
+def paths(run: dict, get_sprite: SpriteGetter | None = None) -> bytes:
+    im, d = _canvas()
+    _background(d, E.biome(run["wave"]))
+    d.rectangle((0, 0, W, 22), fill=(40, 56, 88))
+    _text(d, (8, 5), "갈림길! 어느 길로 갈까?", font=BOLD, fill=(255, 232, 120), shadow=(16, 24, 40))
+    wv = f"WAVE {run['wave'] + 1}"
+    _text(d, (W - _tw(wv) - 8, 5), wv, fill=(255, 255, 255), shadow=(16, 24, 40))
+    entries = []
+    for key in run.get("paths", []):
+        pth = E.PATHS[key]
+        entries.append({"n": pth["n"].split(" ", 1)[1], "d": pth["d"], "draw": PATH_ICON[key]})
+    _cards(im, d, entries)
     _party_strip(im, d, run, get_sprite, 8, 126)
     return _finish(im, d)
 

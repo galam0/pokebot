@@ -1,6 +1,6 @@
 """PokeRogue식 포켓몬 디스코드 봇.
 
-/스타팅 → 지방·스타팅 선택 → 웨이브 배틀 → 보상 선택 → … → 쓰러지면 게임 종료
+/메뉴 → 새 게임·데일리·주간 챌린지 → (전용 스레드) 스타팅 선택 → 웨이브 배틀 → 보상 → … → 쓰러지면 게임 종료
 """
 
 import asyncio
@@ -8,6 +8,7 @@ import io
 import logging
 import os
 import random
+from datetime import datetime, timedelta, timezone
 
 import discord
 from aiohttp import web
@@ -115,10 +116,11 @@ class PokeBot(discord.Client):
         if interaction.type != discord.InteractionType.component:
             return
         custom_id = (interaction.data or {}).get("custom_id", "")
-        if not custom_id.startswith("pr:"):
-            return
         try:
-            await handle_component(interaction, custom_id)
+            if custom_id.startswith("pr:"):
+                await handle_component(interaction, custom_id)
+            elif custom_id.startswith("pm:"):
+                await handle_menu(interaction, custom_id)
         except Exception as e:
             log.exception("버튼 처리 실패 (%s): %s", custom_id, short_error(e))
             await notify_failure(interaction)
@@ -126,13 +128,40 @@ class PokeBot(discord.Client):
 
 bot = PokeBot()
 
+ACTIVE = ("battle", "reward", "switch", "replace", "learn", "path")
+KST = timezone(timedelta(hours=9))
 
-ACTIVE = ("battle", "reward", "switch", "replace", "learn")
+
+def today_key() -> str:
+    return datetime.now(KST).strftime("%Y-%m-%d")
 
 
-async def get_run(uid: int) -> dict | None:
-    run = await storage.get_run(uid)
+def week_key() -> str:
+    y, w, _ = datetime.now(KST).isocalendar()
+    return f"{y}-W{w:02d}"
+
+
+def period_of(mode: str) -> str:
+    return today_key() if mode == "daily" else week_key()
+
+
+async def get_run(uid: int, mode: str = "normal") -> dict | None:
+    run = await storage.get_run(uid, mode)
     return E.normalize(run) if run else None
+
+
+def unlocked_starters(uid: int) -> list[int]:
+    """도감에서 스타팅으로 고를 수 있는 포켓몬 (잡은 포켓몬의 진화 전 첫 모습)"""
+    return sorted({E.root_species(s) for s in storage.dex(uid)})
+
+
+def record_dex(uid: int, run: dict):
+    """잡거나 진화한 포켓몬을 도감에 남긴다 (응답 뒤 백그라운드)"""
+    sids = list(run.pop("caught_list", []) or [])
+    for m in run["party"]:
+        sids += m.pop("evolved", []) or []
+    if sids:
+        _bg(storage.add_dex(uid, sids), "도감 저장")
 
 
 # ---------- 그림 ----------
@@ -141,7 +170,7 @@ def _party_sids(run: dict) -> list[int]:
 
 
 async def render(run: dict, kind: str = "scene", **kwargs) -> discord.File | None:
-    """화면 그림. kind: scene(배틀/보상) / party / summary. 실패하면 None → 글자 화면으로 대신 보여준다."""
+    """화면 그림. kind: scene(배틀/보상) / party / summary / path. 실패하면 None → 글자 화면으로 대신 보여준다."""
     try:
         p, e = E.lead(run), run.get("e")
         if kind == "party":
@@ -153,6 +182,10 @@ async def render(run: dict, kind: str = "scene", **kwargs) -> discord.File | Non
             await sprites.ensure(sids=[run["party"][run["active"] if idx is None else idx]["sid"]], timeout=1.0)
             png = await asyncio.to_thread(scene.summary, run, sprites.get_sprite, idx)
             name = ui.SUMMARY_FILE
+        elif kind == "path":
+            await sprites.ensure(sids=_party_sids(run), timeout=1.0)
+            png = await asyncio.to_thread(scene.paths, run, sprites.get_sprite)
+            name = ui.SCENE_FILE
         elif run["phase"] == "reward":
             await sprites.ensure(sids=_party_sids(run),
                                  items=[scene.reward_icon(k) for k in run.get("rewards", [])], timeout=1.0)
@@ -191,8 +224,8 @@ async def show(interaction: discord.Interaction, run: dict, make, send: bool = F
     prefetch_next(run)
 
 
-def _main(uid: int, trainer: str, run: dict):
-    return lambda image: ui.battle_screen(uid, trainer, run, image)
+def _main(slot: str, trainer: str, run: dict):
+    return lambda image: ui.battle_screen(slot, trainer, run, image)
 
 
 async def send_summary(interaction: discord.Interaction, run: dict, index: int | None, ephemeral: bool):
@@ -202,46 +235,144 @@ async def send_summary(interaction: discord.Interaction, run: dict, index: int |
     await interaction.response.send_message(embed=embed, ephemeral=ephemeral, **kwargs)
 
 
-# ---------- 버튼 처리 ----------
+# ---------- 스레드 ----------
+async def post_in_thread(interaction: discord.Interaction, thread_name: str, content: str | None,
+                         embeds: list[discord.Embed], view: discord.ui.View):
+    """게임 전용 스레드를 만들어 그 안에 올린다. 스레드를 못 만들면(권한·DM 등) 지금 채널에 바로 올린다."""
+    ch = interaction.channel
+    if isinstance(ch, discord.TextChannel):
+        try:
+            thread = await ch.create_thread(name=thread_name[:90], type=discord.ChannelType.public_thread,
+                                            auto_archive_duration=1440)
+            await thread.send(content=content, embeds=embeds, view=view)
+            await interaction.response.send_message(f"🎮 {thread.mention} 에서 게임을 시작했어요!", ephemeral=True)
+            return
+        except Exception as ex:   # 권한이 없으면 지금 채널에서
+            log.info("스레드를 못 만들어서 채널에 올려요: %s", short_error(ex))
+    await interaction.response.send_message(content=content, embeds=embeds, view=view)
+
+
+async def start_game(interaction: discord.Interaction, mode: str):
+    """새 게임 / 데일리 / 주간 챌린지 시작 화면"""
+    user = interaction.user
+    uid, name = user.id, user.display_name
+    slot = ui.slot_of(uid, mode)
+    run = await get_run(uid, mode)
+    if run and run["phase"] in ACTIVE:
+        await show(interaction, run, _main(slot, name, run), send=True,
+                   content="진행 중인 게임이 있어요! 이어서 하거나, 🏳️ 포기 후 새로 시작할 수 있어요.")
+        return
+    if mode == "normal":
+        content, embeds, view = ui.region_screen(slot, len(unlocked_starters(uid)))
+        title = f"{name}의 포켓몬 모험"
+    else:
+        period = period_of(mode)
+        done = storage.has_result(mode, period, uid)
+        if done:
+            board = storage.period_board(mode, period, 100)
+            rank = next((i + 1 for i, r in enumerate(board) if r["user_id"] == uid), "?")
+            word = "오늘" if mode == "daily" else "이번 주"
+            await interaction.response.send_message(
+                f"{word} {ui.MODE_KO[mode]}는 이미 했어요! 기록 **{done['wave']}웨이브** · 현재 {rank}위", ephemeral=True)
+            return
+        starters = E.daily_starters(period) if mode == "daily" else E.challenge_starters(period)
+        content, embeds, view = ui.mode_start_screen(slot, mode, period, starters)
+        sprites.prefetch(backs=starters)
+        title = f"{name}의 {ui.MODE_KO[mode].split(' ', 1)[1]} {period}"
+    await post_in_thread(interaction, title, content or None, embeds, view)
+
+
+# ---------- 메뉴 버튼 (pm:<유저 또는 0>:<동작>) ----------
+async def handle_menu(interaction: discord.Interaction, custom_id: str):
+    _, owner, act = custom_id.split(":")[:3]
+    user = interaction.user
+    if owner != "0" and int(owner) != user.id:
+        await interaction.response.send_message("다른 트레이너의 메뉴예요. `/메뉴`로 내 메뉴를 열어 보세요.", ephemeral=True)
+        return
+    await menu_action(interaction, act)
+
+
+async def menu_action(interaction: discord.Interaction, act: str):
+    user = interaction.user
+    uid, name = user.id, user.display_name
+    if act in ("new", "daily", "challenge"):
+        await start_game(interaction, {"new": "normal"}.get(act, act))
+    elif act == "resume":
+        runs = [(m, r) for m in ("normal", "daily", "challenge") if (r := await get_run(uid, m)) and r["phase"] in ACTIVE]
+        if not runs:
+            await interaction.response.send_message("진행 중인 게임이 없어요. 새 게임을 시작해 보세요!", ephemeral=True)
+            return
+        mode, run = runs[0]
+        await show(interaction, run, _main(ui.slot_of(uid, mode), name, run), send=True,
+                   content=None if len(runs) == 1 else f"진행 중인 게임이 {len(runs)}개라 {ui.MODE_KO[mode]} 게임을 불러왔어요. "
+                                                       "다른 게임은 `/이어하기`에서 골라 주세요.")
+    elif act == "dex":
+        await interaction.response.send_message(embed=ui.dex_embed(name, storage.dex(uid)), ephemeral=True)
+    elif act == "records":
+        await send_records(interaction, ephemeral=True)
+    elif act == "help":
+        await interaction.response.send_message(embed=ui.help_embed(), ephemeral=True)
+    else:
+        await interaction.response.send_message("알 수 없는 메뉴예요.", ephemeral=True)
+
+
+# ---------- 게임 버튼 (pr:<슬롯>:<버전>:<동작>[:<값>]) ----------
 async def handle_component(interaction: discord.Interaction, custom_id: str):
     parts = custom_id.split(":")
-    _, uid, ver, act = parts[:4]
+    _, slot, ver, act = parts[:4]
     arg = ":".join(parts[4:])
-    uid, ver = int(uid), int(ver)
+    ver = int(ver)
+    uid, mode = ui.parse_slot(slot)
     user = interaction.user
     name = user.display_name
     if user.id != uid:
-        await interaction.response.send_message("다른 트레이너의 화면이에요. `/스타팅`으로 직접 모험을 시작해 보세요!", ephemeral=True)
+        await interaction.response.send_message("다른 트레이너의 화면이에요. `/메뉴`로 직접 모험을 시작해 보세요!", ephemeral=True)
         return
 
     async with storage.lock(uid):
-        run = await get_run(uid)
+        run = await get_run(uid, mode)
 
         # --- 스타팅 고르기 (게임이 없을 때) ---
-        if act in ("region", "regions", "starter", "new"):
+        if act in ("region", "regions", "starter", "new", "dexpick"):
             if run and run["phase"] in ACTIVE:
-                await show(interaction, run, _main(uid, name, run))   # 이미 진행 중인 게임이 있으면 그 화면으로
+                await show(interaction, run, _main(slot, name, run))   # 이미 진행 중인 게임이 있으면 그 화면으로
+                return
+            if act == "new" and mode != "normal":
+                await interaction.response.edit_message(view=None)
                 return
             if act == "region":
                 region = (interaction.data.get("values") or [""])[0]
-                content, embeds, view = ui.starter_screen(uid, region)
+                content, embeds, view = ui.starter_screen(slot, region)
                 ids = ui.REGIONS.get(region, [])
                 sprites.prefetch(backs=ids + [c for s in ids for c, *_ in D.SPECIES[s]["evo"]])
+            elif act == "dexpick":
+                content, embeds, view = ui.dex_pick_screen(slot, unlocked_starters(uid), int(arg or 0))
             elif act == "starter":
-                run = E.new_run(int(arg), rng)
+                sid = int(arg or (interaction.data.get("values") or ["0"])[0])
+                seed = period_of(mode) if mode != "normal" else None
+                if mode == "normal":
+                    ok = sid in E.STARTER_POOL or sid in unlocked_starters(uid)
+                elif storage.has_result(mode, seed, uid):
+                    return await notify_failure(interaction, "이번 기간에는 이미 도전했어요.")
+                else:
+                    ok = sid in (E.daily_starters(seed) if mode == "daily" else E.challenge_starters(seed))
+                if not ok or sid not in D.SPECIES:
+                    return await notify_failure(interaction, "고를 수 없는 포켓몬이에요.")
+                run = E.new_run(sid, rng, mode, seed)
                 run["ver"] = 1
-                storage.cache_run(uid, run)
-                await show(interaction, run, _main(uid, name, run))
-                _bg(storage.save_run(uid, run), "게임 저장")
-                log.info("새 게임: %s → %s", user, run["starter"])
+                storage.cache_run(uid, mode, run)
+                record_dex(uid, run)
+                await show(interaction, run, _main(slot, name, run))
+                _bg(storage.save_run(uid, mode, run), "게임 저장")
+                log.info("새 게임(%s): %s → %s", mode, user, sid)
                 return
             else:
-                content, embeds, view = ui.region_screen(uid)
+                content, embeds, view = ui.region_screen(slot, len(unlocked_starters(uid)))
             await interaction.response.edit_message(content=content or None, embeds=embeds, view=view, attachments=[])
             return
 
         if not run:
-            await interaction.response.edit_message(content="이 게임은 이미 끝났어요. `/스타팅`으로 새로 시작해 보세요.",
+            await interaction.response.edit_message(content="이 게임은 이미 끝났어요. `/메뉴`에서 새로 시작해 보세요.",
                                                     embeds=[], view=None, attachments=[])
             return
 
@@ -253,7 +384,7 @@ async def handle_component(interaction: discord.Interaction, custom_id: str):
             await send_summary(interaction, run, idx, ephemeral=True)
             return
         if act == "party":
-            await show(interaction, run, lambda image: ui.party_screen(uid, name, run, image), send=True, ephemeral=True)
+            await show(interaction, run, lambda image: ui.party_screen(slot, name, run, image), send=True, ephemeral=True)
             return
 
         if ver != run.get("ver", 0):
@@ -268,18 +399,18 @@ async def handle_component(interaction: discord.Interaction, custom_id: str):
             arg = (interaction.data.get("values") or [""])[0]
             act = act[:-3]
         menus = {
-            "quit": lambda image: ui.quit_screen(uid, name, run, image),
-            "bag": lambda image: ui.bag_screen(uid, name, run, arg or None, image),
-            "swmenu": lambda image: ui.switch_screen(uid, name, run, image),
-            "shop": lambda image: ui.shop_screen(uid, name, run, arg or None, image),
-            "back": _main(uid, name, run),
+            "quit": lambda image: ui.quit_screen(slot, name, run, image),
+            "bag": lambda image: ui.bag_screen(slot, name, run, arg or None, image),
+            "swmenu": lambda image: ui.switch_screen(slot, name, run, image),
+            "shop": lambda image: ui.shop_screen(slot, name, run, arg or None, image),
+            "back": _main(slot, name, run),
         }
         if act == "bag" and phase not in ("battle", "reward"):
             act = "back"
         if act in menus:
             if act == "swmenu" and (phase != "battle" or len(E.alive(run)) < 2):
                 act = "back"
-            if act == "shop" and phase != "reward":
+            if act == "shop" and (phase != "reward" or not E.shop_open(run)):
                 act = "back"
             await show(interaction, run, menus[act])
             return
@@ -289,12 +420,12 @@ async def handle_component(interaction: discord.Interaction, custom_id: str):
                 return await notify_failure(interaction, "지금 쓸 수 있는 포켓몬이 없어요.")
             title = f"🎒 {E.item_name(arg)}"
             await show(interaction, run,
-                       lambda image: ui.target_screen(uid, name, run, title, "itemt", arg, targets, image, item=arg))
+                       lambda image: ui.target_screen(slot, name, run, title, "itemt", arg, targets, image, item=arg))
             return
         if act == "itemt" and phase in ("battle", "reward"):
             item, _, t = arg.rpartition(".")
             if item in run["bag"] and t.isdigit() and E.item_moves(run, item, int(t)):
-                await show(interaction, run, lambda image: ui.move_pick_screen(uid, name, run, item, int(t), image))
+                await show(interaction, run, lambda image: ui.move_pick_screen(slot, name, run, item, int(t), image))
                 return
         if act == "reward" and phase == "reward" and arg.isdigit() and int(arg) < len(run["rewards"]):
             key = run["rewards"][int(arg)]
@@ -304,7 +435,7 @@ async def handle_component(interaction: discord.Interaction, custom_id: str):
                     return await notify_failure(interaction, "이 보상을 쓸 수 있는 포켓몬이 없어요. 다른 보상을 골라 주세요.")
                 title = f"🎁 {E.reward_info(key, run)['n']}"
                 await show(interaction, run,
-                           lambda image: ui.target_screen(uid, name, run, title, "rewardt", arg, targets, image))
+                           lambda image: ui.target_screen(slot, name, run, title, "rewardt", arg, targets, image))
                 return
 
         # --- 게임 상태를 바꾸는 동작 ---
@@ -330,6 +461,8 @@ async def handle_component(interaction: discord.Interaction, custom_id: str):
                 E.resolve_learn(run, int(arg), rng)
             elif act == "noforget" and phase == "learn":
                 E.resolve_learn(run, None, rng)
+            elif act == "path" and phase == "path":
+                E.resolve_path(run, arg, rng)
             elif act == "reward" and phase == "reward":
                 E.choose_reward(run, int(arg), rng)
             elif act == "rewardt" and phase == "reward":
@@ -347,7 +480,7 @@ async def handle_component(interaction: discord.Interaction, custom_id: str):
             elif act == "relnew" and phase == "replace":
                 E.resolve_replace(run, None)
             else:
-                await show(interaction, run, _main(uid, name, run))
+                await show(interaction, run, _main(slot, name, run))
                 return
         except (ValueError, IndexError, KeyError) as ex:
             log.info("안 되는 동작 %s (%s): %s", act, arg, ex)
@@ -355,18 +488,24 @@ async def handle_component(interaction: discord.Interaction, custom_id: str):
             return
 
         run["ver"] = run.get("ver", 0) + 1
+        record_dex(uid, run)
         if stay == "shop":
-            await show(interaction, run, lambda image: ui.shop_screen(uid, name, run, shop_cat, image))
+            await show(interaction, run, lambda image: ui.shop_screen(slot, name, run, shop_cat, image))
         else:
-            await show(interaction, run, _main(uid, name, run))
+            await show(interaction, run, _main(slot, name, run))
 
         if run["phase"] in ("over", "clear"):
             cleared = run["wave"] if run["phase"] == "clear" else run["wave"] - 1
-            storage.cache_run(uid, None)
-            _bg(storage.finish_run(uid, name, run, cleared, run["phase"] == "clear"), "게임 기록")
-            log.info("게임 종료: %s %d웨이브", user, cleared)
+            storage.cache_run(uid, mode, None)
+            if mode != "normal":   # 기록은 바로 메모리에 (다시 도전 못 하게)
+                storage._results.setdefault((mode, run.get("seed") or ""), {})[uid] = {
+                    "mode": mode, "period": run.get("seed"), "user_id": uid, "name": name, "wave": cleared,
+                    "starter": run["starter"], "final": max(run["party"], key=lambda m: m["lv"])["sid"],
+                    "clear": run["phase"] == "clear"}
+            _bg(storage.finish_run(uid, mode, name, run, cleared, run["phase"] == "clear"), "게임 기록")
+            log.info("게임 종료(%s): %s %d웨이브", mode, user, cleared)
         else:
-            _bg(storage.save_run(uid, run), "게임 저장")
+            _bg(storage.save_run(uid, mode, run), "게임 저장")
 
 
 # ---------- 명령어 ----------
@@ -377,47 +516,89 @@ async def on_command_error(interaction: discord.Interaction, error: app_commands
     await notify_failure(interaction)
 
 
+@bot.tree.command(name="메뉴", description="포켓몬 로그라이크 메뉴 (새 게임·데일리·챌린지·도감·기록)")
+async def menu(interaction: discord.Interaction):
+    await interaction.response.send_message(embed=ui.menu_embed(), view=ui.menu_view(interaction.user.id), ephemeral=True)
+
+
+@bot.tree.command(name="세팅", description="(관리자) 이 채널에 누구나 쓰는 게임 버튼 패널을 올려요")
+@app_commands.default_permissions(manage_guild=True)
+async def setup_panel(interaction: discord.Interaction):
+    await interaction.response.send_message(embed=ui.menu_embed(public=True), view=ui.menu_view(0))
+
+
 @bot.tree.command(name="스타팅", description="스타팅 포켓몬을 골라 새 게임(모험)을 시작해요")
 async def start(interaction: discord.Interaction):
-    uid = interaction.user.id
-    run = await get_run(uid)
-    if run and run["phase"] in ACTIVE:
-        await show(interaction, run, _main(uid, interaction.user.display_name, run), send=True,
-                   content="진행 중인 게임이 있어요! 이어서 하거나, 🏳️ 포기 후 새로 시작할 수 있어요.")
-        return
-    content, embeds, view = ui.region_screen(uid)
-    await interaction.response.send_message(content=content or None, embeds=embeds, view=view)
+    await start_game(interaction, "normal")
+
+
+@bot.tree.command(name="데일리", description="오늘의 데일리 도전 (모두 같은 조건, 하루 한 번)")
+async def daily(interaction: discord.Interaction):
+    await start_game(interaction, "daily")
+
+
+@bot.tree.command(name="챌린지", description="이번 주 챌린지 (특별 규칙, 주에 한 번)")
+async def challenge(interaction: discord.Interaction):
+    await start_game(interaction, "challenge")
 
 
 @bot.tree.command(name="이어하기", description="진행 중인 게임 화면을 다시 불러와요")
-async def resume(interaction: discord.Interaction):
+@app_commands.describe(종류="불러올 게임 (비워 두면 진행 중인 게임 하나)")
+@app_commands.choices(종류=[app_commands.Choice(name="일반", value="normal"),
+                          app_commands.Choice(name="데일리", value="daily"),
+                          app_commands.Choice(name="주간 챌린지", value="challenge")])
+async def resume(interaction: discord.Interaction, 종류: app_commands.Choice[str] | None = None):
     uid = interaction.user.id
-    run = await get_run(uid)
-    if not run or run["phase"] not in ACTIVE:
-        await interaction.response.send_message("진행 중인 게임이 없어요. `/스타팅`으로 시작해 보세요!", ephemeral=True)
-        return
-    await show(interaction, run, _main(uid, interaction.user.display_name, run), send=True)
+    modes = [종류.value] if 종류 else ["normal", "daily", "challenge"]
+    for mode in modes:
+        run = await get_run(uid, mode)
+        if run and run["phase"] in ACTIVE:
+            await show(interaction, run, _main(ui.slot_of(uid, mode), interaction.user.display_name, run), send=True)
+            return
+    await interaction.response.send_message("진행 중인 게임이 없어요. `/메뉴`에서 시작해 보세요!", ephemeral=True)
 
 
-@bot.tree.command(name="내포켓몬", description="이번 게임의 파티를 보고, 한 마리씩 자세히 볼 수 있어요")
+@bot.tree.command(name="내포켓몬", description="진행 중인 게임의 파티를 보고, 한 마리씩 자세히 볼 수 있어요")
 async def my_pokemon(interaction: discord.Interaction):
     uid = interaction.user.id
-    run = await get_run(uid)
-    if not run:
-        await interaction.response.send_message("진행 중인 게임이 없어요. `/스타팅`으로 시작해 보세요!", ephemeral=True)
-        return
-    await show(interaction, run, lambda image: ui.party_screen(uid, interaction.user.display_name, run, image), send=True)
+    for mode in ("normal", "daily", "challenge"):
+        run = await get_run(uid, mode)
+        if run and run["phase"] in ACTIVE:
+            slot = ui.slot_of(uid, mode)
+            await show(interaction, run, lambda image: ui.party_screen(slot, interaction.user.display_name, run, image),
+                       send=True)
+            return
+    await interaction.response.send_message("진행 중인 게임이 없어요. `/메뉴`에서 시작해 보세요!", ephemeral=True)
 
 
-@bot.tree.command(name="기록", description="내 최고 기록과 랭킹을 봐요")
-async def records(interaction: discord.Interaction):
+@bot.tree.command(name="도감", description="지금까지 잡은 포켓몬 도감을 봐요")
+async def dex_cmd(interaction: discord.Interaction):
+    await interaction.response.send_message(embed=ui.dex_embed(interaction.user.display_name,
+                                                               storage.dex(interaction.user.id)))
+
+
+async def send_records(interaction: discord.Interaction, ephemeral: bool = False):
     try:
         trainer, top = await asyncio.wait_for(
-            asyncio.gather(storage.get_trainer(interaction.user.id), storage.leaderboard(10)), timeout=2.5)
+            asyncio.gather(storage.get_trainer(interaction.user.id), storage.leaderboard(10)), timeout=2.2)
     except asyncio.TimeoutError:
-        await interaction.response.send_message("기록을 불러오는 중이에요. 잠깐 뒤에 다시 시도해 주세요.", ephemeral=True)
-        return
-    await interaction.response.send_message(embed=ui.records(trainer, top, interaction.user.id))
+        trainer, top = None, None
+    me = interaction.user.id
+    embeds = []
+    if top is not None:
+        embeds.append(ui.records(trainer, top, me))
+    day, week = today_key(), week_key()
+    embeds.append(ui.period_board_embed(f"📅 오늘의 데일리 · {day}", storage.period_board("daily", day), me))
+    rule, mono = E.weekly_rules(week)
+    embeds.append(ui.period_board_embed(
+        f"🏆 주간 챌린지 · {week}", storage.period_board("challenge", week), me,
+        "규칙: " + E.RULES[rule] + (f" ({D.TYPE_KO[mono]})" if mono else "")))
+    await interaction.response.send_message(embeds=embeds, ephemeral=ephemeral)
+
+
+@bot.tree.command(name="기록", description="내 최고 기록과 랭킹, 오늘의 데일리·이번 주 챌린지 랭킹")
+async def records(interaction: discord.Interaction):
+    await send_records(interaction)
 
 
 if __name__ == "__main__":

@@ -39,6 +39,76 @@ STATUS_IMMUNE = {"par": {13}, "brn": {10}, "psn": {4, 9}, "frz": {15}}
 
 BIOMES = ["풀숲", "동굴", "해변", "숲", "화산", "설원", "도시", "유적", "하늘탑", "챔피언로드"]
 
+# ---------- 모드 (일반 / 데일리 / 주간 챌린지) ----------
+# 데일리·챌린지는 run["seed"]로 상대·보상·갈림길을 정해서 모두 같은 게임을 한다 (배틀 중 운은 각자 다름).
+RULES = {
+    "mono":     "단일 타입: 정해진 타입의 포켓몬만 쓰고 잡을 수 있어요",
+    "noitems":  "아이템 금지: 볼 말고는 가방 아이템과 상점을 쓸 수 없어요",
+    "hardcore": "하드코어: 이겨도 회복되지 않고, 새 지역에서도 회복되지 않아요",
+    "lv50":     "레벨 제한: 레벨이 50에서 멈춰요",
+}
+WEEKLY_ROTATION = ["mono", "noitems", "hardcore", "lv50"]
+STARTER_POOL = [1, 4, 7, 152, 155, 158, 252, 255, 258, 387, 390, 393, 495, 498, 501,
+                650, 653, 656, 722, 725, 728, 810, 813, 816, 906, 909, 912]
+
+
+def seeded(seed: str, *tags) -> random.Random:
+    return random.Random(":".join(map(str, (seed,) + tags)))
+
+
+def _srng(run: dict, rng: random.Random, *tags) -> random.Random:
+    """데일리·챌린지면 시드로 정해진 난수, 아니면 그냥 난수"""
+    return seeded(run["seed"], *tags) if run.get("seed") else rng
+
+
+def daily_starters(seed: str) -> list[int]:
+    return seeded(seed, "starters").sample(STARTER_POOL, 3)
+
+
+def weekly_rules(seed: str) -> tuple[str, int | None]:
+    """(규칙, 단일 타입이면 타입 번호)"""
+    r = seeded(seed, "rule")
+    rule = WEEKLY_ROTATION[int(seed.split("-W")[-1]) % len(WEEKLY_ROTATION)] if "-W" in seed else r.choice(WEEKLY_ROTATION)
+    return rule, (r.randint(1, 18) if rule == "mono" else None)
+
+
+def challenge_starters(seed: str) -> list[int]:
+    rule, mono = weekly_rules(seed)
+    r = seeded(seed, "starters")
+    if mono:
+        pool = [s for s in _base_species() if mono in D.types(s) and 300 <= D.bst(s) <= 450]
+        return r.sample(pool, min(3, len(pool)))
+    return r.sample(STARTER_POOL, 3)
+
+
+def _base_species() -> list[int]:
+    return [sid for sid, s in D.SPECIES.items() if not s["from"] and not s["leg"]]
+
+
+def root_species(sid: int) -> int:
+    """진화 전 첫 단계 (도감 해금용)"""
+    while D.SPECIES[sid]["from"]:
+        sid = D.SPECIES[sid]["from"]
+    return sid
+
+
+def allowed(run: dict, sid: int) -> bool:
+    """단일 타입 챌린지에서 쓸 수 있는 포켓몬인지"""
+    mono = run.get("mono")
+    return not mono or mono in D.types(sid)
+
+
+# ---------- 갈림길 (몇 웨이브마다 다음 길 고르기) ----------
+PATHS = {
+    "rest":    {"n": "🏕️ 쉼터", "d": "살아 있는 파티 HP 50% 회복, 기절한 포켓몬은 HP 25%로 깨어남"},
+    "elite":   {"n": "⚔️ 강적의 길", "d": "다음 상대가 4레벨 더 강하지만 돈 2배, 보상 4개 중 고르기"},
+    "market":  {"n": "🛒 떠돌이 상인", "d": "다음 보상 때 상점 30% 할인"},
+    "mystery": {"n": "❓ 수상한 상자", "d": "아이템이나 돈이 나올 수도, 기습을 당할 수도"},
+    "train":   {"n": "🥋 수련장", "d": "파티 전원이 다음 레벨까지 필요한 경험치의 절반을 얻음"},
+}
+PATH_AFTER = (3, 6)   # 각 10웨이브 구간에서 3, 6웨이브를 깬 뒤 갈림길
+
+
 STRUGGLE = {"n": "발버둥", "t": 0, "p": 50, "a": None, "c": 0, "pr": 0, "pp": 1}   # PP가 모두 떨어지면
 
 
@@ -97,8 +167,12 @@ def stats_line(mon: dict) -> list[tuple[str, int]]:
     return [("HP", max_hp(mon))] + [(D.STAT_KO[i], stat(mon, i)) for i in range(1, 6)]
 
 
+def level_cap(mon: dict) -> int:
+    return mon.get("cap") or MAX_LEVEL
+
+
 def exp_to_next(mon: dict) -> int:
-    if mon["lv"] >= MAX_LEVEL:
+    if mon["lv"] >= level_cap(mon):
         return 0
     g = D.SPECIES[mon["sid"]]["g"]
     return D.total_exp(g, mon["lv"] + 1) - D.total_exp(g, mon["lv"])
@@ -202,14 +276,24 @@ _OLD_ITEM = {"pokeball": "poke-ball", "greatball": "great-ball", "ultraball": "u
              "fullheal": "full-heal"}
 
 
-def new_run(starter: int, rng: random.Random | None = None) -> dict:
+def new_run(starter: int, rng: random.Random | None = None, mode: str = "normal", seed: str | None = None) -> dict:
+    """mode: normal / daily(seed=날짜) / challenge(seed=주)"""
     rng = rng or random.Random()
-    p = new_mon(starter, 5, rng)
+    p = new_mon(starter, 5, seeded(seed, "starter-iv") if seed else rng)
     p["iv"] = [max(iv, 20) for iv in p["iv"]]   # 스타팅은 개체값 최소 20 보장
-    p["hp"] = max_hp(p)
     run = {"wave": 0, "phase": "battle", "party": [p], "active": 0, "e": None, "log": [],
            "rewards": [], "money": START_MONEY, "bag": dict(START_BAG), "rerolls": 0, "turn": 0,
-           "exp_mult": 1.0, "starter": starter, "best_hit": 0, "caught": 0}
+           "exp_mult": 1.0, "starter": starter, "best_hit": 0, "caught": 0, "caught_list": [starter],
+           "mode": mode, "seed": seed, "rule": None, "mono": None}
+    if mode == "challenge" and seed:
+        run["rule"], run["mono"] = weekly_rules(seed)
+        if run["rule"] == "lv50":
+            p["cap"] = 50
+        if run["rule"] == "noitems":
+            run["bag"] = {"poke-ball": 5}
+        if run["rule"] == "mono":
+            run["bag"]["poke-ball"] = 10   # 같은 타입 동료를 빨리 모을 수 있게
+    p["hp"] = max_hp(p)
     start_wave(run, rng)
     return run
 
@@ -225,6 +309,11 @@ def normalize(run: dict) -> dict:
     run.setdefault("rerolls", 0)
     run.setdefault("caught", 0)
     run.setdefault("turn", 0)
+    run.setdefault("mode", "normal")
+    run.setdefault("seed", None)
+    run.setdefault("rule", None)
+    run.setdefault("mono", None)
+    run.setdefault("caught_list", [])
     old_rewards = run.get("rewards", [])
     run["rewards"] = [k for k in old_rewards if _valid_reward(k)] or (["balls"] if old_rewards else [])
     for m in run["party"] + ([run["e"]] if run.get("e") else []):
@@ -282,6 +371,8 @@ def enemy_level(wave: int, rng: random.Random) -> int:
 
 
 _BASE_POOL = [sid for sid, s in D.SPECIES.items() if not s["from"] and not s["leg"]]
+EARLY_SAFE_WAVES = 8
+EARLY_EXCLUDE_TYPES = {8, 9, 16}   # 고스트, 강철, 드래곤
 _LEGEND_POOL = [sid for sid, s in D.SPECIES.items() if s["leg"] and not s["from"] and D.bst(sid) >= 580]
 
 
@@ -307,15 +398,42 @@ def wild_species(wave: int, lv: int, rng: random.Random) -> int:
     if is_boss_wave(wave):
         cap += 120
     pool = [s for s in _BASE_POOL if D.bst(s) <= cap] or _BASE_POOL
+    if wave <= EARLY_SAFE_WAVES:   # 초반에는 노말 기술이 안 듣거나 잘 안 듣는 타입을 빼서 스타팅이 막히지 않게
+        pool = [s for s in pool if not set(D.types(s)) & EARLY_EXCLUDE_TYPES] or pool
     sid = _evolve_for_level(rng.choice(pool), lv, rng)
     if is_boss_wave(wave):   # 보스는 한 단계 더 진화 (30웨이브부터는 최종 진화형)
         sid = _evolve_for_level(sid, MAX_LEVEL if wave >= 30 else lv + 8, rng)
     return sid
 
 
-def roll_enemy(wave: int, rng: random.Random) -> dict:
+def boss_bars(wave: int) -> int:
+    """보스 HP 칸 수 (칸이 깨질 때마다 보스가 강해진다)"""
+    if wave >= FINAL_WAVE:
+        return 5
+    return 2 if wave < 30 else (3 if wave < 60 else 4)
+
+
+def roll_enemy(wave: int, rng: random.Random, mono: int | None = None) -> dict:
     lv = enemy_level(wave, rng)
-    return new_mon(wild_species(wave, lv, rng), lv, rng, boss=is_boss_wave(wave))
+    sid = wild_species(wave, lv, rng)
+    if mono and wave <= EARLY_SAFE_WAVES:   # 단일 타입 챌린지 초반: 그 타입의 약점을 찌르는 상대는 다시 뽑기
+        weak = {t for t in range(1, 19) if D.effectiveness(t, [mono]) > 1}
+        for _ in range(10):
+            if not set(D.types(sid)) & weak:
+                break
+            sid = wild_species(wave, lv, rng)
+    if mono and not is_boss_wave(wave) and rng.random() < 0.6:   # 단일 타입 챌린지: 잡을 수 있는 상대를 자주
+        pool = [s for s in _base_species() if mono in D.types(s) and D.bst(s) <= 280 + wave * 6]
+        if pool:
+            sid = _evolve_for_level(rng.choice(pool), lv, rng)
+    mon = new_mon(sid, lv, rng, boss=is_boss_wave(wave))
+    if mon["boss"]:
+        mon["bars"] = mon["bars_left"] = boss_bars(wave)
+    return mon
+
+
+def next_enemy(run: dict, wave: int, rng: random.Random) -> dict:
+    return roll_enemy(wave, _srng(run, rng, "enemy", wave), run.get("mono"))
 
 
 def start_wave(run: dict, rng: random.Random) -> list[str]:
@@ -323,13 +441,29 @@ def start_wave(run: dict, rng: random.Random) -> list[str]:
     wave = run["wave"]
     msgs = []
     if wave > 1 and (wave - 1) % BIOME_SIZE == 0:
-        heal_party(run)
-        msgs.append(f"🗺️ 새 지역 **{biome(wave)}**에 도착했다! 파티의 HP와 PP가 모두 회복됐다.")
+        if run.get("rule") == "hardcore":
+            msgs.append(f"🗺️ 새 지역 **{biome(wave)}**에 도착했다! (하드코어: 회복 없음)")
+        else:
+            heal_party(run)
+            msgs.append(f"🗺️ 새 지역 **{biome(wave)}**에 도착했다! 파티의 HP와 PP가 모두 회복됐다.")
     nxt = run.pop("next_e", None)
     if nxt and nxt.get("wave") == wave:   # 보상 고르는 동안 미리 정해 둔 상대 (그림을 미리 받아 두려고)
         run["e"] = nxt["mon"]
     else:
-        run["e"] = roll_enemy(wave, rng)
+        run["e"] = next_enemy(run, wave, rng)
+    run["elite"] = bool(run.pop("elite_next", False))
+    if run["elite"]:
+        e = run["e"]
+        hp_ratio = 1.0
+        e["lv"] = min(MAX_LEVEL, e["lv"] + 4)
+        e["moves"] = pick_moves(e["sid"], e["lv"])
+        e["pp"], e["ppx"] = [], []
+        fix_pp(e)
+        e["hp"] = int(max_hp(e) * hp_ratio)
+    if run.get("ambush_next"):
+        run.pop("ambush_next")
+        run["e"]["lv"] = min(MAX_LEVEL, run["e"]["lv"] + 2)
+        run["e"]["hp"] = max_hp(run["e"])
     sid, lv, boss = run["e"]["sid"], run["e"]["lv"], run["e"]["boss"]
     for m in run["party"]:
         _reset_battle_state(m)
@@ -338,8 +472,11 @@ def start_wave(run: dict, rng: random.Random) -> list[str]:
         run["active"] = alive(run)[0]
     run["rerolls"] = 0
     run["turn"] = 0
-    tag = "⚠️ 마지막 보스 " if wave == FINAL_WAVE else ("👑 보스 " if boss else "야생의 ")
+    lv = run["e"]["lv"]
+    tag = "⚠️ 마지막 보스 " if wave == FINAL_WAVE else ("👑 보스 " if boss else ("⚔️ 강적 " if run["elite"] else "야생의 "))
     msgs.append(f"{tag}**{D.name(sid)}** Lv.{lv}이(가) 나타났다!")
+    if boss:
+        msgs.append(f"보스는 HP 보호막이 {run['e']['bars']}칸 있다! 칸이 깨질 때마다 더 강해진다.")
     run["phase"] = "battle"
     run["log"] = msgs
     return msgs
@@ -449,7 +586,7 @@ def _act(user: dict, target: dict, mid: int, uname: str, tname: str, rng: random
         log.append(f"{tname}에게는 효과가 없는 것 같다...")
         return
 
-    total, hits, crit_any, endured = 0, _hit_count(m, rng), False, False
+    total, hits, crit_any, endured, broke = 0, _hit_count(m, rng), False, False, []
     for _ in range(hits):
         crit = rng.random() < _crit_chance(user, m)
         crit_any |= crit
@@ -459,6 +596,13 @@ def _act(user: dict, target: dict, mid: int, uname: str, tname: str, rng: random
             dmg = target["hp"] - 1
             target["sash"] = 1
             endured = True
+        if target.get("bars_left", 0) > 1:   # 보스 보호막: 이번 칸 아래로는 한 번에 못 내려감
+            line = math.ceil(max_hp(target) * (target["bars_left"] - 1) / target["bars"])
+            if target["hp"] - dmg < line:
+                dmg = target["hp"] - line
+                target["bars_left"] -= 1
+                stat_i = rng.randrange(5)
+                broke.append(stat_i)
         dmg = min(dmg, target["hp"])
         target["hp"] -= dmg
         total += dmg
@@ -477,6 +621,9 @@ def _act(user: dict, target: dict, mid: int, uname: str, tname: str, rng: random
     log.append(f"→ {tname}에게 **{total}** 데미지")
     if endured:
         log.append(f"{tname}은(는) 기합의띠로 버텼다!")
+    for stat_i in broke:
+        log.append(f"🛡️ {tname}의 보호막이 깨졌다! (남은 보호막 {target['bars_left'] - 1}칸)")
+        _change_stage(target, tname, stat_i, 1, log)
 
     if m.get("dr") and total:
         amt = max(1, abs(total * m["dr"]) // 100)
@@ -713,6 +860,8 @@ def evo_child(mon: dict, item: str) -> int | None:
 
 def item_usable_now(run: dict, item: str) -> bool:
     cat = ITEMS[item]["cat"]
+    if run.get("rule") == "noitems" and cat != "ball":
+        return False
     if cat == "ball":
         return run["phase"] == "battle"
     if cat == "battle":
@@ -876,6 +1025,8 @@ def throw_ball(run: dict, item: str, rng: random.Random | None = None) -> str:
     rng = rng or random.Random()
     if not is_ball(item) or run["phase"] != "battle":
         raise ValueError("not a ball")
+    if not allowed(run, run["e"]["sid"]):
+        raise ValueError("mono rule")
     chance = catch_chance(run, item)
     _take(run, item)
     e = run["e"]
@@ -895,6 +1046,9 @@ def throw_ball(run: dict, item: str, rng: random.Random | None = None) -> str:
             heal_full(mon)
             log.append(f"{ename}의 HP와 PP가 모두 회복됐다!")
         run["caught"] = run.get("caught", 0) + 1
+        run.setdefault("caught_list", []).append(e["sid"])
+        if run.get("rule") == "lv50":
+            mon["cap"] = 50
         log.extend(win(run, rng, caught=True))
         if len(run["party"]) < MAX_PARTY:
             run["party"].append(mon)
@@ -973,7 +1127,8 @@ def resolve_learn(run: dict, forget: int | None, rng: random.Random | None = Non
     if learner(run) is None:
         after = run.pop("after_learn", "reward")
         if after == "next_wave":
-            msgs.extend(start_wave(run, rng))
+            run["phase"] = "reward"
+            msgs.extend(advance(run, rng))
         else:
             run["phase"] = "reward"
     run["log"] = msgs
@@ -993,13 +1148,14 @@ def exp_gain(p: dict, e: dict, mult: float) -> int:
 
 def gain_exp(p: dict, amount: int) -> list[str]:
     msgs = []
-    if p["lv"] >= MAX_LEVEL:
+    cap = level_cap(p)
+    if p["lv"] >= cap:
         return msgs
     p["exp"] += amount
-    while p["lv"] < MAX_LEVEL and p["exp"] >= exp_to_next(p):
+    while p["lv"] < cap and p["exp"] >= exp_to_next(p):
         p["exp"] -= exp_to_next(p)
         msgs.extend(level_up(p))
-    if p["lv"] >= MAX_LEVEL:
+    if p["lv"] >= cap:
         p["exp"] = 0
     return msgs
 
@@ -1032,6 +1188,7 @@ def evolve(p: dict, child: int) -> list[str]:
     p["sid"] = child
     if p["hp"] > 0:
         p["hp"] = min(max_hp(p), p["hp"] + max_hp(p) - old_max)
+    p.setdefault("evolved", []).append(child)   # 도감 기록용 (봇이 저장 후 비움)
     msgs = [f"✨ 축하합니다! **{before}**은(는) **{D.name(child)}**(으)로 진화했다!"]
     for l, mid in D.SPECIES[child]["ls"]:
         if l in (1, p["lv"]) and mid not in p["moves"]:
@@ -1053,13 +1210,13 @@ def win(run: dict, rng: random.Random, caught: bool = False) -> list[str]:
         if m["hp"] <= 0:
             continue
         amount = exp_gain(m, e, run.get("exp_mult", 1.0))
-        if m["lv"] < MAX_LEVEL:
+        if m["lv"] < level_cap(m):
             msgs.append(f"{D.name(m['sid'])}은(는) 경험치 **{amount}**을(를) 얻었다!")
         msgs.extend(gain_exp(m, amount))
         _reset_battle_state(m)
-        if WIN_HEAL and m["hp"] < max_hp(m):
+        if WIN_HEAL and run.get("rule") != "hardcore" and m["hp"] < max_hp(m):
             m["hp"] = min(max_hp(m), m["hp"] + int(max_hp(m) * WIN_HEAL))
-    money = wave_money(run["wave"], e.get("boss", False))
+    money = wave_money(run["wave"], e.get("boss", False)) * (2 if run.get("elite") else 1)
     run["money"] = run.get("money", 0) + money
     msgs.append(f"💰 **₽{money:,}**을(를) 얻었다! (소지금 ₽{run['money']:,})")
     if lead(run)["hp"] <= 0 and alive(run):
@@ -1069,8 +1226,8 @@ def win(run: dict, rng: random.Random, caught: bool = False) -> list[str]:
         msgs.append(f"🏆 **{FINAL_WAVE}웨이브 클리어!** 전설을 {'잡았다' if caught else '쓰러뜨렸다'}!")
         return msgs
     run["phase"] = "reward"
-    run["rewards"] = roll_rewards(run, rng)
-    run["next_e"] = {"wave": run["wave"] + 1, "mon": roll_enemy(run["wave"] + 1, rng)}
+    run["rewards"] = roll_rewards(run, rng, 4 if run.get("elite") else 3)
+    run["next_e"] = {"wave": run["wave"] + 1, "mon": next_enemy(run, run["wave"] + 1, rng)}
     _maybe_learn(run, "reward")
     return msgs
 
@@ -1174,8 +1331,15 @@ def reroll_cost(run: dict) -> int:
 
 
 def shop_price(run: dict, item: str) -> int:
-    """웨이브가 오를수록 조금씩 비싸진다 (PokeRogue처럼)"""
-    return int(ITEMS[item]["price"] * (1 + run["wave"] // BIOME_SIZE * 0.2) / 10) * 10
+    """웨이브가 오를수록 조금씩 비싸진다 (PokeRogue처럼). 떠돌이 상인을 만나면 30% 할인"""
+    price = ITEMS[item]["price"] * (1 + run["wave"] // BIOME_SIZE * 0.2)
+    if run.get("discount_wave") == run["wave"]:
+        price *= 0.7
+    return int(price / 10) * 10
+
+
+def shop_open(run: dict) -> bool:
+    return run.get("rule") != "noitems"
 
 
 def _tm_targets(run: dict, mid: int) -> list[int]:
@@ -1204,7 +1368,12 @@ def _evo_candidates(run: dict) -> list[str]:
 
 
 def roll_rewards(run: dict, rng: random.Random, n: int = 3) -> list[str]:
+    rng = _srng(run, rng, "reward", run["wave"], run.get("rerolls", 0))
     weights = {k: v["w"] for k, v in REWARDS.items()}
+    if run.get("rule") == "noitems":
+        for k, v in REWARDS.items():
+            if v["kind"] == "bag" and not is_ball(v["item"][0]):
+                weights[k] = 0
     hurt = sum(1 for m in run["party"] if m["hp"] < max_hp(m) * 0.5)
     fainted = sum(1 for m in run["party"] if m["hp"] <= 0)
     low_pp = any(m["pp"][j] <= max_pp(m, j) // 4 for m in run["party"] for j in range(len(m["moves"])))
@@ -1226,7 +1395,8 @@ def roll_rewards(run: dict, rng: random.Random, n: int = 3) -> list[str]:
     tms = _tm_candidates(run)
     if tms:
         weights[f"tm:{rng.choice(tms)}"] = TM_WEIGHT
-    weights[f"held:{rng.choice(list(HELD))}"] = HELD_WEIGHT
+    if run.get("rule") != "noitems":
+        weights[f"held:{rng.choice(list(HELD))}"] = HELD_WEIGHT
     evos = _evo_candidates(run)
     if evos:
         weights[f"evo:{rng.choice(evos)}"] = EVO_WEIGHT
@@ -1253,7 +1423,7 @@ def reward_targets(run: dict, key: str) -> list[int]:
         return []
     if "vit" in r:
         return [i for i, m in enumerate(run["party"]) if m["vit"][r["vit"]] < MAX_VITAMIN]
-    return [i for i, m in enumerate(run["party"]) if m["lv"] < MAX_LEVEL]
+    return [i for i, m in enumerate(run["party"]) if m["lv"] < level_cap(m)]
 
 
 def needs_target(key: str) -> bool:
@@ -1298,7 +1468,7 @@ def apply_reward(run: dict, key: str, target: int | None = None) -> list[str]:
                 msgs.append(f"{D.name(p['sid'])}의 {D.STAT_KO[i]}이(가) 올랐다! ({p['vit'][i]}/{MAX_VITAMIN})")
             else:
                 for _ in range(3 if key == "candy3" else 1):
-                    if p["lv"] < MAX_LEVEL:
+                    if p["lv"] < level_cap(p):
                         p["exp"] = 0
                         msgs.extend(level_up(p))
     return [x for x in msgs if x]
@@ -1321,7 +1491,72 @@ def choose_reward(run: dict, index: int, rng: random.Random | None = None, targe
     key = run["rewards"][index]
     msgs = apply_reward(run, key, target)
     run["rewards"] = []
-    if learner(run) is not None:   # 기술 잊기를 먼저 하고 다음 웨이브로
+    msgs.extend(advance(run, rng))
+    run["log"] = msgs
+    return msgs
+
+
+def path_due(run: dict) -> bool:
+    return run["wave"] % BIOME_SIZE in PATH_AFTER and run["wave"] + 1 < FINAL_WAVE
+
+
+def advance(run: dict, rng: random.Random) -> list[str]:
+    """보상 다음: 기술 잊기 → 갈림길 → 다음 웨이브"""
+    if learner(run) is not None:
+        run["phase"] = "learn"
+        run["after_learn"] = "next_wave"
+        return []
+    if path_due(run) and not run.get("path_done") == run["wave"]:
+        r = _srng(run, rng, "path", run["wave"])
+        run["paths"] = r.sample(list(PATHS), 3)
+        run["phase"] = "path"
+        return ["🧭 갈림길이 나왔다! 어느 길로 갈까?"]
+    return start_wave(run, rng)
+
+
+def resolve_path(run: dict, key: str, rng: random.Random | None = None) -> list[str]:
+    rng = rng or random.Random()
+    if run["phase"] != "path" or key not in run.get("paths", []):
+        raise ValueError("bad path")
+    r = _srng(run, rng, "path-event", run["wave"], key)
+    msgs = [f"{PATHS[key]['n']}(으)로 갔다."]
+    if key == "rest":
+        for m in run["party"]:
+            if m["hp"] > 0:
+                m["hp"] = min(max_hp(m), m["hp"] + max_hp(m) // 2)
+            else:
+                m["hp"] = max(1, max_hp(m) // 4)
+        msgs.append("모닥불 옆에서 쉬었다. 파티가 기운을 차렸다!")
+    elif key == "elite":
+        run["elite_next"] = True
+        msgs.append("강한 기운이 느껴진다...")
+    elif key == "market":
+        run["discount_wave"] = run["wave"] + 1
+        msgs.append("떠돌이 상인: \"다음에 들르면 30% 깎아 줄게!\"")
+    elif key == "train":
+        for m in run["party"]:
+            if m["hp"] > 0 and m["lv"] < level_cap(m):
+                msgs.extend(gain_exp(m, exp_to_next(m) // 2 + 1))
+        msgs.append("파티가 수련으로 경험치를 얻었다!")
+    elif key == "mystery":
+        roll = r.random()
+        if roll < 0.5:
+            bag_keys = [k for k, v in REWARDS.items() if v["kind"] == "bag"
+                        and (run.get("rule") != "noitems" or is_ball(v["item"][0]))]
+            k = r.choice(bag_keys)
+            item, cnt = REWARDS[k]["item"]
+            add_item(run, item, cnt)
+            msgs.append(f"상자 안에 {item_name(item)} {cnt}개가 들어 있었다!")
+        elif roll < 0.8:
+            v = nugget_value(run["wave"]) // 2
+            run["money"] += v
+            msgs.append(f"상자 안에 ₽{v:,}이(가) 들어 있었다!")
+        else:
+            run["ambush_next"] = True
+            msgs.append("앗! 상자는 함정이었다! 다음 상대가 기습해 온다!")
+    run["path_done"] = run["wave"]
+    run.pop("paths", None)
+    if learner(run) is not None:
         run["phase"] = "learn"
         run["after_learn"] = "next_wave"
         run["log"] = msgs
@@ -1334,7 +1569,7 @@ def choose_reward(run: dict, index: int, rng: random.Random | None = None, targe
 def skip_reward(run: dict, rng: random.Random | None = None) -> list[str]:
     rng = rng or random.Random()
     run["rewards"] = []
-    msgs = ["보상을 받지 않고 넘어갔다."] + start_wave(run, rng)
+    msgs = ["보상을 받지 않고 넘어갔다."] + advance(run, rng)
     run["log"] = msgs
     return msgs
 
@@ -1353,7 +1588,7 @@ def reroll(run: dict, rng: random.Random | None = None) -> list[str]:
 
 def buy(run: dict, item: str) -> list[str]:
     price = shop_price(run, item)
-    if item not in SHOP or run["money"] < price:
+    if item not in SHOP or run["money"] < price or not shop_open(run):
         raise ValueError("cannot buy")
     run["money"] -= price
     add_item(run, item)

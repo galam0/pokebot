@@ -37,7 +37,7 @@ def battle_action(run, rng):
     p, e = E.lead(run), run["e"]
     bag = run["bag"]
     # 포획: 보스가 아니고 파티에 자리가 있으면, 상대 HP가 적당히 깎였을 때
-    if len(run["party"]) < E.MAX_PARTY and not e["boss"] and e["hp"] < E.max_hp(e) * 0.6:
+    if len(run["party"]) < E.MAX_PARTY and not e["boss"] and e["hp"] < E.max_hp(e) * 0.6 and E.allowed(run, e["sid"]):
         for ball in BALLS:
             if bag.get(ball) and E.catch_chance(run, ball) > 0.25:
                 return E.throw_ball(run, ball, rng)
@@ -85,12 +85,14 @@ def reward_action(run, rng):
     if run["phase"] != "reward":
         return
     # 상점
-    if len(run["party"]) < E.MAX_PARTY and run["bag"].get("poke-ball", 0) + run["bag"].get("great-ball", 0) < 3:
+    if not E.shop_open(run):
+        pass
+    elif len(run["party"]) < E.MAX_PARTY and run["bag"].get("poke-ball", 0) + run["bag"].get("great-ball", 0) < 3:
         while run["money"] >= E.shop_price(run, "poke-ball") + 500 and run["bag"].get("poke-ball", 0) < 5:
             E.buy(run, "poke-ball")
-    if not run["bag"].get("super-potion") and run["money"] >= E.shop_price(run, "super-potion") + 300:
+    if E.shop_open(run) and not run["bag"].get("super-potion") and run["money"] >= E.shop_price(run, "super-potion") + 300:
         E.buy(run, "super-potion")
-    if not run["bag"].get("revive") and run["money"] >= E.shop_price(run, "revive") + 300:
+    if E.shop_open(run) and not run["bag"].get("revive") and run["money"] >= E.shop_price(run, "revive") + 300:
         E.buy(run, "revive")
     # 보상 고르기 (점수가 높은 것)
     def score(k):
@@ -121,10 +123,10 @@ def learn_action(run, rng):
     E.resolve_learn(run, worst if E._move_value(m, new) > vals[worst] else None, rng)
 
 
-def play(starter, rng):
-    run = E.new_run(starter, rng)
+def play(starter, rng, mode="normal", seed=None):
+    run = E.new_run(starter, rng, mode, seed)
     steps = 0
-    while run["phase"] in ("battle", "reward", "switch", "replace", "learn"):
+    while run["phase"] in ("battle", "reward", "switch", "replace", "learn", "path"):
         steps += 1
         if steps > 20000:
             break
@@ -135,6 +137,10 @@ def play(starter, rng):
             E.switch(run, best_member(run), rng)
         elif ph == "learn":
             learn_action(run, rng)
+        elif ph == "path":
+            hurt = sum(1 for m in run["party"] if m["hp"] < E.max_hp(m) * 0.5)
+            pref = (["rest"] if hurt >= 2 else []) + ["train", "mystery", "market", "elite", "rest"]
+            E.resolve_path(run, next(k for k in pref if k in run["paths"]), rng)
         elif ph == "replace":
             new = run["pending"]["mon"]
             weakest = min(range(len(run["party"])), key=lambda i: D.bst(run["party"][i]["sid"]) + run["party"][i]["lv"] * 3)
