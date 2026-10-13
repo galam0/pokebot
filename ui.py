@@ -6,12 +6,11 @@
   → 봇이 재시작해도, 몇 시간이 지나도 버튼이 계속 동작한다.
 """
 
-import re
-
 import discord
 
 from game import data as D
 from game import engine as E
+from game.text import josa
 
 REGIONS = {
     "관동": [1, 4, 7], "성도": [152, 155, 158], "호연": [252, 255, 258],
@@ -30,28 +29,6 @@ def cid(uid: int, ver: int, act: str, arg: str | int = "") -> str:
 def _frozen(view: discord.ui.View) -> discord.ui.View:
     view.stop()   # discord.py가 View를 저장하지 않게 → 클릭은 on_interaction이 처리
     return view
-
-
-# ---------- 조사 (은/는, 이/가, 을/를, 으로/로) ----------
-_JOSA = re.compile(r"([가-힣0-9A-Za-z])(\*\*)?(은\(는\)|이\(가\)|을\(를\)|\(으\)로)")
-_DIGIT_BATCHIM = {"0": 21, "1": 8, "2": 0, "3": 16, "4": 0, "5": 0, "6": 1, "7": 8, "8": 8, "9": 0}  # 영 일 이 삼 사 오 육 칠 팔 구
-
-
-def _batchim(ch: str) -> int:
-    """받침 번호 (0 = 없음, 8 = ㄹ)"""
-    if "가" <= ch <= "힣":
-        return (ord(ch) - 0xAC00) % 28
-    return _DIGIT_BATCHIM.get(ch, 0)
-
-
-def josa(text: str) -> str:
-    def repl(m):
-        ch, bold, j = m.group(1), m.group(2) or "", m.group(3)
-        b = _batchim(ch)
-        pick = {"은(는)": "은" if b else "는", "이(가)": "이" if b else "가",
-                "을(를)": "을" if b else "를", "(으)로": "으로" if b and b != 8 else "로"}[j]
-        return ch + bold + pick
-    return _JOSA.sub(repl, text)
 
 
 # ---------- 막대 ----------
