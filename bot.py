@@ -1,4 +1,3 @@
-import asyncio
 import logging
 import os
 
@@ -24,24 +23,16 @@ def short_error(error: Exception) -> str:
     return str(error).split("\n", 1)[0][:200]
 
 
-async def safe_edit(interaction: discord.Interaction, **kwargs):
-    """429(요청 제한/일시 차단)면 잠깐 기다렸다가 다시 시도한다."""
-    for attempt in range(3):
-        try:
-            return await interaction.edit_original_response(**kwargs)
-        except discord.HTTPException as e:
-            if e.status == 429 and attempt < 2:
-                await asyncio.sleep(3 * (attempt + 1))
-                continue
-            raise
+# 참고: Render 무료 플랜의 공유 IP는 디스코드의 '응답 나중에 수정' 경로
+# (defer 후 edit_original_response / followup)가 Cloudflare에 막히는 일이 있어요.
+# 그래서 모든 응답을 interaction.response.* 로 '즉시' 보내고, defer는 쓰지 않아요.
+# 디스코드는 3초 안에 응답해야 하므로 클릭 시점에는 외부 API를 부르지 않아요.
 
 
 async def notify_failure(interaction: discord.Interaction):
     """처리에 실패했을 때 사용자에게 안내한다. 이것도 막혔으면 조용히 넘어간다."""
     try:
-        if interaction.response.is_done():
-            await interaction.followup.send(BUSY_MSG, ephemeral=True)
-        else:
+        if not interaction.response.is_done():
             await interaction.response.send_message(BUSY_MSG, ephemeral=True)
     except Exception:
         pass
@@ -59,6 +50,19 @@ STARTERS = {
     "9세대 · 팔데아": [906, 909, 912],
 }
 
+# 스타팅 포켓몬 한국어 이름 (클릭할 때 PokeAPI를 기다리지 않도록 미리 넣어둠)
+KO_NAMES = {
+    1: "이상해씨", 4: "파이리", 7: "꼬부기",
+    152: "치코리타", 155: "브케인", 158: "리아코",
+    252: "나무지기", 255: "아차모", 258: "물짱이",
+    387: "모부기", 390: "불꽃숭이", 393: "팽도리",
+    495: "주리비얀", 498: "뚜꾸리", 501: "수댕이",
+    650: "도치마론", 653: "푸호꼬", 656: "개구마르",
+    722: "나몰빼미", 725: "냐오불", 728: "누리공",
+    810: "흥나숭", 813: "염버니", 816: "울머기",
+    906: "나오하", 909: "뜨아거", 912: "꾸왁스",
+}
+
 SPRITE_BASE = "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon"
 
 
@@ -66,32 +70,35 @@ SPRITE_BASE = "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/
 _info_cache: dict[int, dict] = {}
 
 
-async def get_info(species_id: int) -> dict:
-    """한국어 이름과 이미지 URL을 가져온다. 실패해도 봇이 죽지 않도록 폴백 처리."""
+def info_now(species_id: int) -> dict:
+    """네트워크 없이 바로 쓸 수 있는 정보 (캐시 → 고정 이름 → 번호)."""
     if species_id in _info_cache:
         return _info_cache[species_id]
+    return {
+        "name": KO_NAMES.get(species_id, f"#{species_id}"),
+        "image": f"{SPRITE_BASE}/other/official-artwork/{species_id}.png",
+    }
 
-    name = f"#{species_id}"
+
+async def get_info(species_id: int) -> dict:
+    """한국어 이름과 이미지 URL. 진화 후 포켓몬처럼 고정 목록에 없으면 PokeAPI에서 가져온다."""
+    info = info_now(species_id)
+    if species_id in _info_cache or species_id in KO_NAMES:
+        return info
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(
                 f"https://pokeapi.co/api/v2/pokemon-species/{species_id}",
-                timeout=aiohttp.ClientTimeout(total=8),
+                timeout=aiohttp.ClientTimeout(total=2),  # 디스코드 3초 제한 안에 끝나도록
             ) as resp:
                 data = await resp.json()
-        name = next(
+        info["name"] = next(
             (n["name"] for n in data["names"] if n["language"]["name"] == "ko"),
             data["name"],
         )
+        _info_cache[species_id] = info
     except Exception:
         pass  # 이름만 번호로 표시하고 계속 진행
-
-    info = {
-        "name": name,
-        "image": f"{SPRITE_BASE}/other/official-artwork/{species_id}.png",
-    }
-    if not name.startswith("#"):
-        _info_cache[species_id] = info
     return info
 
 
@@ -172,9 +179,8 @@ class GenSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        await interaction.response.defer()
         ids = STARTERS[self.values[0]]
-        infos = await asyncio.gather(*(get_info(i) for i in ids))
+        infos = [info_now(i) for i in ids]
 
         embeds = [
             discord.Embed(title=info["name"], color=discord.Color.blurple()).set_thumbnail(
@@ -183,8 +189,7 @@ class GenSelect(discord.ui.Select):
             for info in infos
         ]
         view = StarterView(interaction.user.id, ids, infos)
-        await safe_edit(
-            interaction,
+        await interaction.response.edit_message(
             content=f"**{self.values[0]}** 스타팅 포켓몬이에요. 함께할 파트너를 골라주세요!",
             embeds=embeds,
             view=view,
@@ -204,12 +209,10 @@ class StarterButton(discord.ui.Button):
         self.info = info
 
     async def callback(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-
         # 중복 선택 방지 (버튼을 연타하거나 창을 여러 개 연 경우)
         if await has_any_pokemon(interaction.user.id):
-            await safe_edit(
-                interaction, content="이미 파트너 포켓몬이 있어요!", embeds=[], view=None
+            await interaction.response.edit_message(
+                content="이미 파트너 포켓몬이 있어요!", embeds=[], view=None
             )
             return
 
@@ -220,7 +223,7 @@ class StarterButton(discord.ui.Button):
             color=discord.Color.green(),
         )
         embed.set_image(url=self.info["image"])
-        await safe_edit(interaction, content=None, embeds=[embed], view=None)
+        await interaction.response.edit_message(content=None, embeds=[embed], view=None)
 
 
 class StarterView(OwnerView):
@@ -317,7 +320,6 @@ async def my_pokemon(interaction: discord.Interaction):
         )
         return
 
-    await interaction.response.defer()
     info = await get_info(row["species_id"])
     name = row["nickname"] or info["name"]
 
@@ -327,7 +329,7 @@ async def my_pokemon(interaction: discord.Interaction):
     embed.add_field(name="친밀도", value=f"{row['friendship']} / 255")
     embed.set_image(url=info["image"])
     embed.set_footer(text=f"{interaction.user.display_name} 트레이너의 파트너")
-    await interaction.followup.send(embed=embed)
+    await interaction.response.send_message(embed=embed)
 
 
 if __name__ == "__main__":
