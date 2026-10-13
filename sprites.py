@@ -1,15 +1,16 @@
-"""포켓몬·아이템 스프라이트 받아오기 (PokeAPI sprites, 메모리 캐시).
+"""포켓몬·아이템 스프라이트 받아오기 (포켓몬은 smogon/sprites 블랙·화이트 스타일, 아이템은 PokeAPI, 메모리 캐시).
 
 - 그림은 처음 한 번만 받고 메모리에 둔다 (한 장 1~3KB).
 - 화면을 그릴 때는 ensure()로 잠깐만(기본 1초) 기다리고, 못 받으면 빈 자리로 그린다.
   → 디스코드 3초 제한을 넘지 않게.
 - 보상을 고르는 동안 다음 상대 그림을 prefetch()로 미리 받아 둔다.
-- 배틀 GIF용 움직이는 스프라이트(쇼다운 GIF)는 프레임 목록 [(그림, ms)]으로 둔다.
+- 배틀 GIF용 움직이는 스프라이트(1~5세대 블랙·화이트 GIF)는 프레임 목록 [(그림, ms)]으로 둔다.
 - 주인공 그림은 assets/trainers에 있으면 그걸 쓰고, 없으면(6·8·9세대) 쇼다운에서 받는다.
 """
 
 import asyncio
 import io
+import json
 import logging
 from collections import deque
 from pathlib import Path
@@ -19,7 +20,9 @@ from PIL import Image, ImageOps, ImageSequence
 
 log = logging.getLogger("pokebot.sprites")
 
-BASE = "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites"
+BASE = "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites"   # 아이템
+SMOGON = "https://raw.githubusercontent.com/smogon/sprites/master/src"     # 포켓몬 (블랙·화이트 스타일)
+SHOWDOWN = "https://play.pokemonshowdown.com/sprites"
 TRAINER_BASE = "https://play.pokemonshowdown.com/sprites/trainers"
 TRAINER_DIR = Path(__file__).resolve().parent / "assets" / "trainers"
 TRAINER_REMOTE = {"florian": "florian-s", "juliana": "juliana-s"}   # 쇼다운 파일 이름이 다른 주인공
@@ -27,21 +30,38 @@ _cache: dict[str, Image.Image | list | None] = {}     # 키 -> 이미지 또는 
 _pending: dict[str, asyncio.Task] = {}
 _anim_keys: deque[str] = deque()   # GIF 프레임은 크니까 최근 것만 들고 있는다
 ANIM_KEEP = 24
-ICON_MAX = 898   # 메뉴 아이콘(8세대)이 있는 마지막 번호. 그 뒤는 앞모습을 줄여 쓴다
 _session: aiohttp.ClientSession | None = None
+_sprite_names: dict | None = None
 
 
-def _key_url(kind: str, name) -> list[tuple[str, str]]:
-    if kind == "front":
-        return [(f"front:{name}", f"{BASE}/pokemon/{name}.png")]
-    if kind == "back":
-        return [(f"back:{name}", f"{BASE}/pokemon/back/{name}.png")]
-    if kind == "anim":
-        return [(f"anim:{name}", f"{BASE}/pokemon/other/showdown/{name}.gif")]
-    if kind == "animback":
-        return [(f"animback:{name}", f"{BASE}/pokemon/other/showdown/back/{name}.gif")]
+def _names(sid) -> list:
+    """[앞모습, 뒷모습, 아이콘] 파일 이름 (game/sprite_names.json, tools/build_sprite_names.py로 만든다)"""
+    global _sprite_names
+    if _sprite_names is None:
+        f = Path(__file__).resolve().parent / "game" / "sprite_names.json"
+        _sprite_names = json.loads(f.read_text()) if f.exists() else {}
+    return _sprite_names.get(str(sid)) or [None, None, None]
+
+
+def _mon_url(sid, back: bool) -> str | None:
+    """모든 세대를 같은 블랙·화이트 도트 스타일로: smogon/sprites gen5 (없으면 쇼다운 gen5)"""
+    name = _names(sid)[1 if back else 0]
+    if not name:
+        return None
+    if name.startswith("sd:"):
+        return f"{SHOWDOWN}/{'gen5-back' if back else 'gen5'}/{name[3:]}.png"
+    return f"{SMOGON}/sprites/gen5/{name}"
+
+
+def _key_url(kind: str, name) -> list[tuple[str, str | None]]:
+    if kind in ("front", "back"):
+        return [(f"{kind}:{name}", _mon_url(name, kind == "back"))]
+    if kind in ("anim", "animback"):   # 움직이는 그림은 1~5세대(.gif)만. 나머지는 None → 멈춘 그림이 통통 뛴다
+        url = _mon_url(name, kind == "animback")
+        return [(f"{kind}:{name}", url if url and url.endswith(".gif") else None)]
     if kind == "icon":
-        return [(f"icon:{name}", f"{BASE}/pokemon/versions/generation-viii/icons/{name}.png")]
+        icon = _names(name)[2]
+        return [(f"icon:{name}", f"{SMOGON}/minisprites/pokemon/gen6/{icon}" if icon else None)]
     if kind == "trainer":
         return [(f"trainer:{name}", f"{TRAINER_BASE}/{TRAINER_REMOTE.get(name, name)}.png")]
     return [(f"item:{name}", f"{BASE}/items/{name}.png")]
@@ -91,6 +111,9 @@ def _start(kind: str, name) -> list[asyncio.Task]:
     for key, url in _key_url(kind, name):
         if key in _cache:
             continue
+        if url is None:   # 그림이 없는 것
+            _cache[key] = None
+            continue
         if key not in _pending:
             _pending[key] = asyncio.create_task(_fetch(key, url))
         tasks.append(_pending[key])
@@ -100,7 +123,7 @@ def _start(kind: str, name) -> list[asyncio.Task]:
 def _starts(sids=(), backs=(), items=(), anims=(), anim_backs=(), trainers=(), icons=()) -> list[asyncio.Task]:
     tasks = []
     for sid in icons:
-        tasks += _start("icon", sid) + ([] if sid <= ICON_MAX else _start("front", sid))
+        tasks += _start("icon", sid) + _start("front", sid)   # 아이콘을 못 받으면 앞모습으로
     for sid in sids:
         tasks += _start("front", sid)
     for sid in backs:
@@ -166,5 +189,5 @@ def get_trainer(key: str) -> Image.Image | None:
 
 
 def get_icon(sid: int) -> Image.Image | None:
-    """PC·목록용 작은 아이콘 (8세대 메뉴 아이콘)"""
+    """PC·도감용 작은 아이콘 (smogon 메뉴 아이콘, 모든 세대 같은 스타일)"""
     return _cache.get(f"icon:{sid}")

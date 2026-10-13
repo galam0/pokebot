@@ -435,14 +435,16 @@ def _fainted(img: Image.Image) -> Image.Image:
     return img
 
 
+BACK_ZOOM = 4   # 큰 그림 기준 (앞모습은 SCALE=3)
+
+
 def _actor_big(get_sprite, sid: int, back: bool, fainted: bool) -> Image.Image:
     """멈춘 스프라이트를 큰 그림 크기로 (뒷모습은 조금 크게)"""
     img = _sprite(get_sprite, sid, back)
     if fainted:
         img = _fainted(img)
-    if back and img.height * 2 <= 120:   # 작은 뒷모습은 2배 (정수배라 도트가 고르다)
-        img = img.resize((img.width * 2, img.height * 2), Image.NEAREST)
-    return img.resize((img.width * SCALE, img.height * SCALE), Image.NEAREST)
+    k = BACK_ZOOM if back else SCALE   # 뒷모습은 모두 같은 배율로 조금 크게 (큰 그림 기준 정수배라 도트가 고르다)
+    return img.resize((img.width * k, img.height * k), Image.NEAREST)
 
 
 def _paste_foot(canvas: Image.Image, img: Image.Image, cx: int, foot: int):
@@ -467,7 +469,7 @@ GIF_IDLE_MS = 1200     # 움직이는 그림이 없을 때 숨쉬기 한 바퀴
 def _anim_big(frames: list, still: Image.Image) -> list[tuple[Image.Image, int]]:
     """움직이는 스프라이트를 멈춘 그림과 비슷한 크기가 되도록 정수배로 키운다 (도트가 고르게)"""
     h = max(f.height for f, _ in frames)
-    k = max(1, min(4, round(still.height / h))) if still.getbbox() else 2
+    k = max(1, min(BACK_ZOOM, round(still.height / h))) if still.getbbox() else 2
     return [(f.resize((f.width * k, f.height * k), Image.NEAREST), ms) for f, ms in frames]
 
 
