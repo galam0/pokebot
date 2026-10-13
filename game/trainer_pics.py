@@ -3,6 +3,7 @@
 - fr_: 파이어레드 (관동·성도의 일반 트레이너, 관동 관장·사천왕·라이벌)
 - em_: 에메랄드 (호연 트레이너 전부)
 - hg_: 하트골드 (성도의 이름 있는 인물: 관장·사천왕·챔피언·라이벌·로켓단 간부)
+- pt_: 플라티나 (광휘·빛나 뒷모습)
 """
 
 FR_CLASS = {
@@ -44,9 +45,9 @@ NAMED = {   # (지방, 배틀 이름) → 파일
     ("hoenn", "사천왕 미혜"): "em_elite_four_glacia", ("hoenn", "사천왕 권수"): "em_elite_four_drake",
     ("hoenn", "챔피언 성호"): "em_steven", ("hoenn", "라이벌 봄이"): "em_may",
 }
-# 주인공 뒷모습 (파이어레드·에메랄드에 있는 넷, 나머지는 남녀에 맞춰)
-BACK = {"red": "fr_back_red", "leaf": "fr_back_leaf", "brendan": "em_back_brendan", "may": "em_back_may"}
-FEMALE = {"leaf", "lyra", "may", "dawn", "hilda", "rosa", "serena", "selene", "gloria", "juliana"}
+# 주인공 뒷모습 원본 (파이어레드·에메랄드·플라티나). 없는 주인공은 등장 장면에서 앞모습 그림으로 선다
+BACK = {"red": "fr_back_red", "leaf": "fr_back_leaf", "brendan": "em_back_brendan", "may": "em_back_may",
+        "lucas": "pt_back_lucas", "dawn": "pt_back_dawn"}
 
 
 def opponent(region: str, battle: dict) -> str | None:
@@ -65,8 +66,8 @@ def opponent(region: str, battle: dict) -> str | None:
     return None
 
 
-def player_back(hero: str) -> str:
-    return BACK.get(hero) or ("fr_back_leaf" if hero in FEMALE else "fr_back_red")
+def player_back(hero: str) -> str | None:
+    return BACK.get(hero)
 
 
 def all_files() -> set[str]:

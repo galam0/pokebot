@@ -698,7 +698,7 @@ def battle_result(run: dict, get_icon: "IconGetter | None" = None, get_sprite: S
 
 
 # ---------- 트레이너 등장 ----------
-def trainer_intro(run: dict) -> bytes:
+def trainer_intro(run: dict, get_trainer: TrainerGetter | None = None) -> bytes:
     """포켓몬이 나오기 전: 상대 트레이너가 서 있고, 대사가 나온다 (주인공은 뒷모습)"""
     b = run.get("battle") or {}
     region = A.region_of(run["loc"])
@@ -710,10 +710,15 @@ def trainer_intro(run: dict) -> bytes:
     foe = _asset(f"battle/{TP.opponent(region, b)}.png") if TP.opponent(region, b) else None
     if foe:
         _put(im, d, foe, 236, 88, 96, 84)
-    hero = HR.of(run)   # 원본 뒷모습이 없는 주인공은 색을 바꾼 뒷모습 (tools/build_trainer_pics.py)
-    me = _asset(f"battle/hero_back_{hero}.png") or _asset(f"battle/{TP.player_back(hero)}.png")
-    if me:
+    hero = HR.of(run)
+    back = TP.player_back(hero)
+    me = _asset(f"battle/{back}.png") if back else None
+    if me:   # 원본 뒷모습
         _put(im, d, me, 78, 152, 120, 110, kmax=BACK_ZOOM)
+    else:    # 뒷모습 원본이 없는 주인공: 진짜 앞모습 그림이 상대를 보고 선다
+        front = _hero(get_trainer, hero)
+        if front:
+            _put(im, d, front.transpose(Image.FLIP_LEFT_RIGHT), 70, 150, 110, 100)
     # 양쪽 포켓몬 수 (볼)
     def balls(x0, y0, n, alive, right=False):
         d.rounded_rectangle((x0 - 4, y0 - 3, x0 + 6 * 9 + 2, y0 + 9), radius=3, fill=(40, 48, 64), outline=(248, 248, 240))
@@ -1023,7 +1028,6 @@ def _hero(get_trainer: TrainerGetter | None, key: str) -> Image.Image | None:
 _ASSETS = Path(__file__).resolve().parent.parent / "assets"
 _places: dict | None = None
 _img_cache: dict[str, Image.Image | None] = {}
-FEMALE = {"leaf", "lyra", "may", "dawn", "hilda", "rosa", "serena", "selene", "gloria", "juliana"}
 OVERWORLD = {"red": "red_normal", "leaf": "green_normal", "brendan": "brendan", "may": "may"}
 DIALOG_BG, DIALOG_EDGE, DIALOG_INNER = (248, 248, 248), (88, 96, 112), (160, 200, 216)
 
@@ -1058,14 +1062,19 @@ def _walker(name: str, face: str) -> Image.Image | None:
     return fr.transpose(Image.FLIP_LEFT_RIGHT) if face == "right" else fr
 
 
-def _overworld(hero: str) -> str:
-    """주인공의 필드 그림: 파이어레드·에메랄드에 있는 넷은 원본, 나머지는 레드·리프 그림의 색을 바꾼 것
-    (tools/build_places.py). 그것도 없으면 남녀에 맞춰 레드·리프"""
+def _overworld(hero: str) -> str | None:
+    """주인공의 필드 그림 (원본만): 파이어레드·에메랄드 넷, 플라티나·하트골드 넷. 없으면 None (팻말 옆 얼굴 그림)"""
     if hero in OVERWORLD:
         return OVERWORLD[hero]
-    if _asset(f"people/hero_{hero}.png") is not None:
-        return f"hero_{hero}"
-    return "green_normal" if hero in FEMALE else "red_normal"
+    return f"hero_{hero}" if _asset(f"people/hero_{hero}.png") is not None else None
+
+
+def _face(get_trainer: TrainerGetter | None, hero: str) -> Image.Image | None:
+    """주인공 그림의 머리 부분 (위쪽 정사각형)"""
+    img = _hero(get_trainer, hero)
+    if img is None:
+        return None
+    return img.crop((0, 0, img.width, min(img.height, img.width)))
 
 
 def _dialog(d, lines: list[tuple[str, tuple]]):
@@ -1084,7 +1093,8 @@ def _dialog(d, lines: list[tuple[str, tuple]]):
         _text(d, (12 + c * (W // 2 - 4), 152 + r * 12), s, font=f, fill=col)
 
 
-def map_scene(run: dict, kind: str = "field", lines: list[tuple[str, tuple]] | None = None) -> bytes | None:
+def map_scene(run: dict, kind: str = "field", lines: list[tuple[str, tuple]] | None = None,
+              get_trainer: TrainerGetter | None = None) -> bytes | None:
     """파이어레드 원본 맵 위에 주인공·사람들을 세우고, 장소 팻말과 대화창을 얹는다. 맵이 없으면 None"""
     sc = place_data(run["loc"], kind)
     if sc is None:
@@ -1095,9 +1105,10 @@ def map_scene(run: dict, kind: str = "field", lines: list[tuple[str, tuple]] | N
         if img:
             full.alpha_composite(img, (x * 16, y * 16 + 16 - img.height))
     px, py, face = sc["player"]
-    me = _walker(_overworld(HR.of(run)), face)
-    if me:
-        full.alpha_composite(me, (px * 16, py * 16 + 16 - me.height))
+    walker = _overworld(HR.of(run))
+    me = _walker(walker, face) if walker else None
+    if me:   # 32칸짜리(4세대) 그림도 발이 칸 아래, 가운데에 오게
+        full.alpha_composite(me, (px * 16 + 8 - me.width // 2, py * 16 + 16 - me.height + (4 if me.width > 16 else 0)))
     # 카메라: 주인공이 화면 가운데보다 조금 위에 (아래는 대화창)
     cx, cy = px * 16 + 8, py * 16 + 8 + 22
     x0 = (full.width - W) // 2 if full.width <= W else max(0, min(full.width - W, cx - W // 2))
@@ -1113,11 +1124,18 @@ def map_scene(run: dict, kind: str = "field", lines: list[tuple[str, tuple]] | N
     L = A.loc(run)
     title = {"center": f"{L['n']} 포켓몬센터", "mart": f"{L['n']} " + ("백화점" if L.get("dept") else "프렌들리숍"),
              "gym": f"{L['n']} 체육관", "home": "우리 집"}.get(kind, L["n"])
-    title, tf = _shrink(title, W - 100, (BOLD, FONT, SMALL))
+    sx = 4
+    if not me:   # 걷는 그림이 없는 주인공: 팻말 옆에 얼굴 그림
+        face_img = _face(get_trainer, HR.of(run))
+        if face_img:
+            d.rounded_rectangle((4, 4, 30, 30), radius=4, fill=(248, 248, 240), outline=(72, 88, 120), width=1)
+            _put(im, d, face_img, 17, 29, 24, 24)
+            sx = 34
+    title, tf = _shrink(title, W - 100 - (sx - 4), (BOLD, FONT, SMALL))
     tw = _tw(title, tf)
-    d.rounded_rectangle((4, 4, 16 + tw, 22), radius=3, fill=(248, 248, 240), outline=(72, 88, 120), width=1)
-    d.rectangle((6, 6, 8, 20), fill=(232, 88, 72))
-    _text(d, (11, 6 + (BOLD.size - tf.size) // 6), title, font=tf)
+    d.rounded_rectangle((sx, 4, sx + 12 + tw, 22), radius=3, fill=(248, 248, 240), outline=(72, 88, 120), width=1)
+    d.rectangle((sx + 2, 6, sx + 4, 20), fill=(232, 88, 72))
+    _text(d, (sx + 7, 6 + (BOLD.size - tf.size) // 6), title, font=tf)
     # 오른쪽 위: 돈 · 배지
     region = A.region_of(run["loc"])
     info = f"₽{run.get('money', 0):,}"
@@ -1215,7 +1233,8 @@ def field(run: dict, get_sprite: SpriteGetter | None = None, get_trainer: Traine
     else:
         lines = None
     try:
-        png = map_scene(run, place, lines) or (map_scene(run, "field") if place != "field" else None)
+        png = map_scene(run, place, lines, get_trainer) or \
+            (map_scene(run, "field", None, get_trainer) if place != "field" else None)
     except Exception:
         png = None
     if png:

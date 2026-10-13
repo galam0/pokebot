@@ -197,7 +197,8 @@ async def render(run: dict, kind: str = "scene", animate: bool = False, **kwargs
             png = await asyncio.to_thread(scene.battle_result, run, sprites.get_icon, sprites.get_sprite)
             name = ui.SCENE_FILE
         elif kind == "intro":
-            png = await asyncio.to_thread(scene.trainer_intro, run)
+            await sprites.ensure(trainers=[H.of(run)], timeout=1.0)
+            png = await asyncio.to_thread(scene.trainer_intro, run, sprites.get_trainer)
             name = ui.SCENE_FILE
         elif kind == "pc":
             page = kwargs.get("page", 0)
@@ -210,8 +211,10 @@ async def render(run: dict, kind: str = "scene", animate: bool = False, **kwargs
             name = ui.SCENE_FILE
         elif kind == "field" or run["phase"] == "field":
             place = kwargs.get("place", "field")
-            if not scene.place_data(run["loc"], "field"):   # 파이어레드 맵이 없는 곳은 예전 그림 (포켓몬·주인공 필요)
+            if not scene.place_data(run["loc"], "field"):   # 원본 맵이 없는 곳은 그린 배경 (포켓몬 그림 필요)
                 await sprites.ensure(sids=_party_sids(run), trainers=[H.of(run)], timeout=1.0)
+            else:   # 걷는 그림이 없는 주인공은 얼굴 그림
+                await sprites.ensure(trainers=[H.of(run)], timeout=1.0)
             png = await asyncio.to_thread(scene.field, run, sprites.get_sprite, sprites.get_trainer, place)
             name = ui.SCENE_FILE
         elif run["phase"] == "reward":

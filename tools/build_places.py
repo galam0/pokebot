@@ -6,7 +6,9 @@
     git clone --depth 1 --filter=blob:none --sparse https://github.com/pret/pokeemerald
     (cd pokeemerald && git sparse-checkout set data/maps data/layouts data/tilesets graphics/object_events/pics/people)
     python tools/render_maps.py <pokeemerald 경로> emerald   # 호연 맵 그림 먼저
-    python tools/build_places.py <pokefirered 경로> <pokeemerald 경로>
+    (주인공 걷는 그림) pret/pokeplatinum: res/graphics/field_sprites/player,
+                      pret/pokeheartgold: files/data/mmodel/mmodel (NSBTX)
+    python tools/build_places.py <pokefirered> <pokeemerald> [<pokeplatinum> <pokeheartgold>]
 
 결과
 - assets/maps/places.json: {장소 키: {장면: {"map", "w", "h", "player": [x, y, 방향], "npcs": [[그림, x, y, 방향]]}}}
@@ -15,6 +17,7 @@
 - assets/pc/forest.png: PC 박스 배경지 (숲)
 """
 import json
+import re
 import struct
 import sys
 from pathlib import Path
@@ -230,9 +233,11 @@ def wallpaper(fr: Path):
 
 def main():
     fr, em = Path(sys.argv[1]), Path(sys.argv[2])
+    pt, hg = (Path(sys.argv[3]), Path(sys.argv[4])) if len(sys.argv) > 4 else (None, None)
     layouts = {l["id"]: l for l in json.loads((fr / "data/layouts/layouts.json").read_text())["layouts"] if "id" in l}
     have = people(fr, em)
-    hero_walkers(fr)
+    if pt and hg:
+        gen4_walkers(pt, hg)
     wallpaper(fr)
     places = {}
     for key, outdoor in OUTDOOR.items():
@@ -269,68 +274,34 @@ def main():
 
 
 
-# ---------- 주인공 걷는 그림 (원본이 없는 주인공은 레드·리프 그림의 색을 바꿔 만든다) ----------
-def _shade(c, k):
-    return tuple(max(0, min(255, int(v * k))) for v in c)
+# ---------- 주인공 걷는 그림 (4세대 원본: 플라티나 광휘·빛나, 하트골드 히비키·코토네) ----------
+GEN4_FRAMES = (4, 0, 8)   # 4세대 필드 그림 32칸 중 [아래, 위, 왼쪽]
 
 
-# 바탕 그림의 (팔레트 번호, 줄 범위) → 부위. 줄은 16x32 칸 안의 y (위에서부터)
-RED_PARTS = {"hat": ({11: "main", 12: "dark", 8: "edge"}, range(0, 19)), "brim": ({9: "light", 10: "main"}, range(0, 19)),
-             "hair": ({6: "main"}, range(19, 23)), "top": ({11: "main", 12: "dark", 9: "light", 10: "main"}, range(19, 32)),
-             "pants": ({6: "dark", 7: "main"}, range(23, 32))}
-LEAF_PARTS = {"hat": ({9: "light", 10: "main", 6: "edge"}, range(0, 20)), "ribbon": ({11: "main", 12: "dark"}, range(0, 20)),
-              "hair": ({4: "main"}, range(0, 32)), "top": ({5: "main", 6: "dark", 7: "light"}, range(20, 32)),
-              "skirt": ({12: "main", 11: "light"}, range(20, 32))}
-HERO_COLORS = {   # 주인공 → (바탕, {부위: 대표 색})
-    "ethan": ("red", {"hair": (40, 40, 48), "hat": (64, 64, 72), "brim": (240, 200, 56), "top": (208, 56, 56), "pants": (56, 56, 64)}),
-    "lucas": ("red", {"hair": (40, 40, 56), "hat": (208, 56, 64), "brim": (232, 232, 240), "top": (72, 104, 192), "pants": (64, 64, 80)}),
-    "hilbert": ("red", {"hair": (96, 56, 32), "hat": (216, 56, 56), "brim": (240, 240, 248), "top": (64, 112, 200), "pants": (48, 48, 56)}),
-    "nate": ("red", {"hair": (112, 64, 40), "hat": (224, 72, 64), "brim": (40, 40, 48), "top": (72, 136, 216), "pants": (208, 208, 216)}),
-    "calem": ("red", {"hair": (56, 40, 32), "hat": (200, 48, 56), "brim": (56, 56, 64), "top": (48, 64, 120), "pants": (96, 104, 120)}),
-    "elio": ("red", {"hair": (32, 32, 40), "hat": (56, 56, 64), "brim": (232, 200, 64), "top": (96, 160, 224), "pants": (48, 48, 56)}),
-    "victor": ("red", {"hair": (72, 48, 32), "hat": (96, 96, 104), "brim": (200, 200, 208), "top": (152, 152, 160), "pants": (64, 72, 96)}),
-    "florian": ("red", {"hair": (120, 72, 40), "hat": (120, 72, 40), "brim": (120, 72, 40), "top": (240, 140, 48), "pants": (224, 200, 136)}),
-    "lyra": ("leaf", {"hat": (240, 240, 248), "ribbon": (216, 56, 56), "hair": (136, 88, 48), "top": (216, 72, 72),
-                      "skirt": (64, 104, 200)}),
-    "dawn": ("leaf", {"hat": (240, 240, 248), "ribbon": (248, 120, 168), "hair": (40, 48, 96), "top": (56, 56, 64),
-                      "skirt": (240, 104, 160)}),
-    "hilda": ("leaf", {"hat": (240, 240, 248), "ribbon": (232, 104, 152), "hair": (120, 72, 40), "top": (232, 232, 240),
-                       "skirt": (72, 104, 176)}),
-    "rosa": ("leaf", {"hat": (240, 120, 168), "ribbon": (240, 240, 248), "hair": (136, 88, 48), "top": (72, 120, 200),
-                      "skirt": (248, 208, 64)}),
-    "serena": ("leaf", {"hat": (232, 120, 152), "ribbon": (56, 56, 64), "hair": (232, 200, 96), "top": (56, 56, 64),
-                        "skirt": (208, 56, 64)}),
-    "selene": ("leaf", {"hat": (216, 56, 56), "ribbon": (216, 56, 56), "hair": (48, 40, 48), "top": (240, 240, 232),
-                        "skirt": (96, 176, 96)}),
-    "gloria": ("leaf", {"hat": (96, 160, 96), "ribbon": (96, 160, 96), "hair": (128, 80, 48), "top": (176, 176, 184),
-                        "skirt": (232, 120, 152)}),
-    "juliana": ("leaf", {"hat": (120, 72, 40), "ribbon": (120, 72, 40), "hair": (120, 72, 40), "top": (152, 96, 200),
-                         "skirt": (96, 80, 120)}),
-}
-TONE = {"main": 1.0, "dark": 0.72, "light": 1.18, "edge": 0.5}
-
-
-def hero_walkers(fr: Path):
-    """원본 걷는 그림이 없는 주인공 16명 → assets/people/hero_<키>.png (레드·리프 그림의 색만 바꿈)"""
-    bases = {"red": ("red_normal", RED_PARTS), "leaf": ("green_normal", LEAF_PARTS)}
-    for key, (base, colors) in HERO_COLORS.items():
-        name, parts = bases[base]
-        src = Image.open(fr / "graphics/object_events/pics/people" / f"{name}.png")
-        idx, pal = src.load(), src.getpalette()
-        out = strip_of(fr / "graphics/object_events/pics/people" / f"{name}.png")
-        op = out.load()
-        fw = src.width // 9
-        for slot, frame in enumerate((0, 1, 2)):   # [아래, 위, 왼쪽]
-            for y in range(src.height):
-                for x in range(fw):
-                    i = idx[frame * fw + x, y]
-                    if i == 0:
-                        continue
-                    for part, (index_tone, rows) in parts.items():
-                        if part in colors and i in index_tone and y in rows:
-                            op[slot * fw + x, y] = _shade(colors[part], TONE[index_tone[i]]) + (255,)
-                            break
-        out.save(OUT_PEOPLE / f"hero_{key}.png")
+def gen4_walkers(pt: Path, hg: Path):
+    """assets/people/hero_<키>.png (32x32 세 칸). 5세대부터는 공개된 원본이 없어 만들지 않는다"""
+    sys.path.insert(0, str(ROOT / "tools"))
+    import nsbtx
+    for key, f in (("lucas", "player_m"), ("dawn", "player_f")):
+        sheet = Image.open(pt / "res/graphics/field_sprites/player" / f"{f}.png")
+        rgba = sheet.convert("RGBA")
+        if sheet.mode == "P":   # 팔레트 0번 = 투명
+            idx, px = sheet.load(), rgba.load()
+            for y in range(rgba.height):
+                for x in range(rgba.width):
+                    if idx[x, y] == 0:
+                        px[x, y] = (0, 0, 0, 0)
+        strip = Image.new("RGBA", (96, 32), (0, 0, 0, 0))
+        for slot, fr_i in enumerate(GEN4_FRAMES):
+            strip.alpha_composite(rgba.crop((0, fr_i * 32, 32, fr_i * 32 + 32)), (slot * 32, 0))
+        strip.save(OUT_PEOPLE / f"hero_{key}.png")
+    for key, model in (("ethan", 69), ("lyra", 70)):
+        frames = nsbtx.decode(hg / "files/data/mmodel/mmodel" / f"mmodel_{model:08d}.NSBTX")
+        frames.sort(key=lambda x: int(re.search(r"\.(\d+)$", x[0]).group(1)))
+        strip = Image.new("RGBA", (96, 32), (0, 0, 0, 0))
+        for slot, fr_i in enumerate(GEN4_FRAMES):
+            strip.alpha_composite(frames[fr_i][2], (slot * 32, 0))
+        strip.save(OUT_PEOPLE / f"hero_{key}.png")
 
 
 if __name__ == "__main__":
