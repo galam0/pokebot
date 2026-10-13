@@ -506,10 +506,14 @@ def after_ko(run: dict, rng: random.Random, caught: bool = False) -> list[str]:
         if m["hp"] <= 0:
             continue
         g = gains.setdefault(str(i), {"exp": 0, "lv0": m["lv"]})
-        if i not in fought:
+        if i in fought:
+            g["fought"] = True
+            amount = E.exp_gain(m, e, mult)
+        elif run["bag"].get("exp-share"):   # 학습장치: 안 나온 포켓몬도 절반
+            g["share"] = True
+            amount = max(1, E.exp_gain(m, e, mult) // 2)
+        else:
             continue
-        g["fought"] = True
-        amount = E.exp_gain(m, e, mult)
         if m["lv"] < E.level_cap(m):
             msgs.append(f"{D.name(m['sid'])}은(는) 경험치 **{amount}**을(를) 얻었다!")
             g["exp"] += amount
@@ -737,7 +741,7 @@ def price(item: str) -> int:
 def buy(run: dict, item: str, count: int = 1) -> list[str]:
     if run["phase"] != "field" or item not in mart_items(run) or count < 1:
         raise ValueError("not sold here")
-    if E.ITEMS[item]["cat"] == "tm" and run["bag"].get(item):
+    if E.ITEMS[item]["cat"] in ("tm", "key") and (run["bag"].get(item) or count > 1):   # 하나면 된다
         raise ValueError("already have tm")
     cost = price(item) * count
     if run["money"] < cost:

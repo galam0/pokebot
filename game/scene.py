@@ -677,7 +677,7 @@ def battle_result(run: dict, get_icon: "IconGetter | None" = None, get_sprite: S
         _text(d, (x1 - 5 - _tw(lv, SMALL if up else FONT), y0 + 4), lv, font=SMALL if up else FONT,
               fill=(40, 152, 72) if up else INK)
         if g and g["exp"]:
-            gain, col = f"+{g['exp']:,} EXP", (40, 104, 200)
+            gain, col = f"+{g['exp']:,} EXP" + (" (학습장치)" if g.get("share") and not g.get("fought") else ""), (40, 104, 200)
         elif m["hp"] <= 0:
             gain, col = "기절함", (176, 64, 64)
         elif g and not g.get("fought"):

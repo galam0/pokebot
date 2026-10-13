@@ -669,7 +669,8 @@ def pc_screen(uid: int, trainer: str, run: dict, page: int = 0, image: bool = Tr
     return Screen(embed, _frozen(view), "pc", {"page": page})
 
 
-MART_CATS = {"ball": "볼", "heal": "회복", "pp": "PP", "battle": "배틀용", "vit": "영양제", "evo": "진화", "tm": "기술머신"}
+MART_CATS = {"ball": "볼", "heal": "회복", "pp": "PP", "battle": "배틀용", "vit": "영양제", "evo": "진화", "tm": "기술머신",
+             "key": "중요한 물건"}
 
 
 def _mart_cat(item: str) -> str:
@@ -700,7 +701,7 @@ def mart_screen(uid: int, trainer: str, run: dict, cat: str | None = None, image
     lines, n = [], 0
     for item in sold:
         price, have = A.price(item), run["bag"].get(item, 0)
-        tm_have = E.ITEMS[item]["cat"] == "tm" and have
+        tm_have = E.ITEMS[item]["cat"] in ("tm", "key") and have   # 기술머신·중요한 물건은 하나면 된다
         lines.append(f"**{E.item_name(item)}** ₽{price:,} — {E.ITEMS[item]['d']}" + (f" (가진 수 {have})" if have else ""))
         _btn(view, f"{E.item_name(item)} ₽{price:,}" + (" (있음)" if tm_have else ""), uid, ver, "buy", f"{item}.1",
              style=B.primary, row=1 + n // 5, disabled=run["money"] < price or bool(tm_have))
@@ -854,6 +855,7 @@ HELP = {   # 주제: (메뉴 이름, 이모지, 한 줄 설명, [(제목, 내용
     "growth": ("성장·진화", "⬆️", "레벨업·기술·진화·물건", [
         ("레벨업", "상대 포켓몬을 쓰러뜨리면 그 상대와 싸운 포켓몬(한 번이라도 나와 있던 포켓몬)만 경험치를 받아요. "
                  "기절한 포켓몬은 못 받아요. 배틀은 파티 맨 앞 포켓몬부터 나가요. "
+                 "상점에서 파는 학습장치(배지 2개부터, ₽3,000)가 있으면 안 나온 포켓몬도 절반을 받아요. "
                  "배틀이 끝나면 포켓몬마다 얻은 경험치와 레벨 변화를 보여 줘요. "
                  "레벨이 오르면 기술을 배우는데, 기술이 4개면 잊을 기술을 직접 골라요."),
         ("진화", "레벨, 진화의 돌, 연결의끈(통신 진화)으로 진화해요. 친밀도·시간 진화는 Lv.25에 진화해요."),

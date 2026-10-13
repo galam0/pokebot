@@ -440,8 +440,10 @@ def start_wave(run: dict, rng: random.Random) -> list[str]:
     nxt = run.pop("next_e", None)
     if nxt and nxt.get("wave") == wave:   # 보상 고르는 동안 미리 정해 둔 상대 (그림을 미리 받아 두려고)
         run["e"] = nxt["mon"]
+        run["seen"] = [run["active"]]
     else:
         run["e"] = next_enemy(run, wave, rng)
+        run["seen"] = [run["active"]]
     sid, lv, boss = run["e"]["sid"], run["e"]["lv"], run["e"]["boss"]
     for m in run["party"]:
         _reset_battle_state(m)
@@ -754,8 +756,8 @@ def switch(run: dict, index: int, rng: random.Random | None = None) -> str:
     old = lead(run)
     _reset_battle_state(old)
     run["active"] = index
-    if isinstance(run.get("battle"), dict):   # 모험: 지금 상대와 싸운 포켓몬으로 센다 (경험치)
-        run["battle"].setdefault("seen", []).append(index)
+    seen = run["battle"] if isinstance(run.get("battle"), dict) else run   # 지금 상대와 싸운 포켓몬으로 센다 (경험치)
+    seen.setdefault("seen", []).append(index)
     new = lead(run)
     log = [] if forced else [f"돌아와, {D.name(old['sid'])}!"]
     log.append(f"가랏, **{D.name(new['sid'])}**!")
@@ -808,6 +810,7 @@ ITEMS: dict[str, dict] = {
     "x-speed":      {"cat": "battle", "stage": 4, "price": 700, "d": "배틀 동안 스피드가 크게 오른다"},
     "dire-hit":     {"cat": "battle", "crit": 2, "price": 650, "d": "배틀 동안 급소에 훨씬 잘 맞는다"},
     "linking-cord": {"cat": "evo", "price": 0, "d": "교환해야 진화하는 포켓몬을 진화시킨다"},
+    "exp-share": {"cat": "key", "price": 3000, "d": "가지고 있으면 배틀에 안 나온 파티 포켓몬도 경험치를 절반 받는다"},
 }
 for _h, _d in HELD.items():
     ITEMS[_h] = {"cat": "held", "price": 0, "d": _d}
@@ -822,10 +825,10 @@ ITEMS["rare-candy"] = {"cat": "candy", "price": 4800, "d": "레벨이 1 오른�
 for _mid, _m in D.MOVES.items():   # 기술머신 (몇 번이고 쓸 수 있다)
     ITEMS[f"tm{_mid}"] = {"cat": "tm", "mid": _mid, "price": 3000 if _m["p"] <= 80 else 7500,
                           "d": f"{D.TYPE_KO[_m['t']]} {'물리' if _m['c'] == 0 else '특수'} 위력 {_m['p']} · 몇 번이고 쓸 수 있다"}
-CAT_ORDER = ["ball", "heal", "status", "revive", "pp", "ppup", "battle", "vit", "candy", "tm", "evo", "held"]
+CAT_ORDER = ["ball", "heal", "status", "revive", "pp", "ppup", "battle", "vit", "candy", "tm", "evo", "held", "key"]
 CAT_KO = {"ball": "볼", "heal": "회복", "status": "상태이상", "revive": "기절 회복", "pp": "PP 회복",
           "ppup": "PP 늘리기", "battle": "배틀용", "vit": "영양제", "candy": "이상한사탕", "tm": "기술머신",
-          "evo": "진화", "held": "지닌 물건"}
+          "evo": "진화", "held": "지닌 물건", "key": "중요한 물건"}
 OUT_OF_BATTLE = ("reward", "field")   # 배틀 밖 (로그라이크 보상 고르기 / 모험 필드)
 SHOP = ["poke-ball", "great-ball", "ultra-ball", "quick-ball", "timer-ball", "net-ball", "heal-ball",
         "potion", "super-potion", "hyper-potion", "max-potion", "full-restore",
@@ -855,6 +858,8 @@ def evo_child(mon: dict, item: str) -> int | None:
 def item_usable_now(run: dict, item: str) -> bool:
     cat = ITEMS[item]["cat"]
     if run.get("rule") == "noitems" and cat != "ball":
+        return False
+    if cat == "key":   # 중요한 물건은 가지고만 있으면 된다
         return False
     if cat in ("ball", "battle"):
         return run["phase"] == "battle"
@@ -1242,13 +1247,15 @@ def win(run: dict, rng: random.Random, caught: bool = False) -> list[str]:
         return adventure.after_ko(run, rng, caught)
     e = run["e"]
     msgs = []
-    for m in run["party"]:
+    fought = set(run.get("seen", [])) | {run["active"]}   # 이 상대와 싸운 포켓몬만 경험치
+    for i, m in enumerate(run["party"]):
         if m["hp"] <= 0:
             continue
-        amount = exp_gain(m, e, run.get("exp_mult", 1.0))
-        if m["lv"] < level_cap(m):
-            msgs.append(f"{D.name(m['sid'])}은(는) 경험치 **{amount}**을(를) 얻었다!")
-        msgs.extend(gain_exp(m, amount))
+        if i in fought:
+            amount = exp_gain(m, e, run.get("exp_mult", 1.0))
+            if m["lv"] < level_cap(m):
+                msgs.append(f"{D.name(m['sid'])}은(는) 경험치 **{amount}**을(를) 얻었다!")
+            msgs.extend(gain_exp(m, amount))
         _reset_battle_state(m)
         if WIN_HEAL and run.get("rule") != "hardcore" and m["hp"] < max_hp(m):
             m["hp"] = min(max_hp(m), m["hp"] + int(max_hp(m) * WIN_HEAL))
@@ -1313,7 +1320,7 @@ REWARDS = {
     "calcium":  {"kind": "target", "vit": 3, "icon": "calcium", "w": 2},
     "zinc":     {"kind": "target", "vit": 4, "icon": "zinc", "w": 2},
     "carbos":   {"kind": "target", "vit": 5, "icon": "carbos", "w": 2},
-    "expcharm": {"kind": "run", "n": "학습장치", "d": "이번 게임 동안 경험치를 더 받는다", "icon": "exp-share", "w": 3},
+    "expcharm": {"kind": "run", "n": "경험치 부적", "d": "이번 게임 동안 경험치를 더 받는다", "icon": "exp-share", "w": 3},
     "nugget":   {"kind": "money", "n": "금구슬", "d": "팔면 돈이 되는 금빛 구슬", "icon": "nugget", "w": 5},
 }
 TM_WEIGHT, HELD_WEIGHT, EVO_WEIGHT = 7, 5, 6

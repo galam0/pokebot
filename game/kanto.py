@@ -262,7 +262,7 @@ BLACKOUT_BASE = [8, 16, 24, 36, 48, 64, 80, 100, 120]
 # 프렌들리숍: (아이템, 필요한 배지 수)
 MART = [("poke-ball", 0), ("potion", 0), ("antidote", 0), ("paralyze-heal", 0),
         ("super-potion", 1), ("burn-heal", 1), ("ice-heal", 1),
-        ("great-ball", 2), ("full-heal", 3), ("revive", 3),
+        ("great-ball", 2), ("exp-share", 2), ("full-heal", 3), ("revive", 3),
         ("hyper-potion", 4), ("ultra-ball", 5), ("max-potion", 6), ("full-restore", 7), ("max-revive", 8)]
 # 무지개시티 백화점에서만 파는 것
 DEPT = ["x-attack", "x-defense", "x-sp-atk", "x-sp-def", "x-speed", "dire-hit",
