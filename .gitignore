@@ -2,6 +2,3 @@
 *.db
 __pycache__/
 
-# 파이어레드 디컴파일에서 만든 원본 그래픽 (tools/render_maps.py로 생성, 저장소에는 올리지 않음)
-assets/maps/
-assets/people/
