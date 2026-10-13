@@ -85,48 +85,82 @@ HEROES_FILE = "heroes.png"
 INTRO_FILE = "intro.png"
 
 
+INTRO_TEXT = ("오박사: \"오오, 왔구나! 함께 떠날 포켓몬을 골라 보거라. 먼 지방에서 온 포켓몬도 있단다.\"\n\n"
+              "• 태초마을에서 출발해 관동의 도로와 동굴을 지나며 포켓몬을 잡고 키워요.\n"
+              "• 체육관 8곳의 배지를 모아 석영고원에서 사천왕과 챔피언에게 도전해요.\n"
+              "• 관동 챔피언이 되면 파티와 PC를 그대로 데리고 **성도 지방**으로 떠날 수 있어요.\n"
+              "• 배지가 늘수록 더 높은 레벨까지 말을 들어요. 지면 마지막 포켓몬센터로 돌아가요.\n"
+              "• 진행은 계속 저장되고, `/초기화`로 처음부터 다시 할 수 있어요.")
+
+
+def adventure_intro_screen(uid, image: bool = False) -> tuple[str, list[discord.Embed], discord.ui.View]:
+    """모험 시작 1단계: 오박사 연구소 설명 → 다음"""
+    e = discord.Embed(title="🧪 오박사 연구소 (1/3)", color=0x3BA55D,
+                      description="설명을 읽고 다음으로 넘어가 주인공과 스타팅을 골라 주세요." if image else INTRO_TEXT)
+    if image:
+        e.set_image(url=f"attachment://{INTRO_FILE}")
+    view = discord.ui.View(timeout=None)
+    view.add_item(discord.ui.Button(label="다음: 주인공 고르기", emoji="▶️", style=discord.ButtonStyle.success,
+                                    custom_id=cid(uid, 0, "heropick", H.DEFAULT)))
+    return "", [e], _frozen(view)
+
+
+def hero_screen(uid, hero: str = H.DEFAULT, image: bool = False) -> tuple[str, list[discord.Embed], discord.ui.View]:
+    """모험 시작 2단계: 역대 주인공 20명 중 고르기 → 다음"""
+    hero = H.valid(hero)
+    _, hname, hgen, hgame = next(h for h in H.HEROES if h[0] == hero)
+    desc = f"지금 고른 주인공: **{hname}** ({hgen}세대 · {hgame})\n메뉴에서 바꾸고, 다 골랐으면 다음으로 넘어가요."
+    if not image:
+        desc += "\n\n" + "\n".join(f"• {n} ({g}세대 · {game})" for _, n, g, game in H.HEROES)
+    e = discord.Embed(title="🧢 주인공 고르기 (2/3)", color=0x3BA55D, description=desc)
+    if image:
+        e.set_image(url=f"attachment://{HEROES_FILE}")
+    view = discord.ui.View(timeout=None)
+    view.add_item(discord.ui.Select(
+        custom_id=cid(uid, 0, "hero"), placeholder="주인공 고르기", row=0,
+        options=[discord.SelectOption(label=n, value=k, default=k == hero, description=f"{g}세대 · {game}")
+                 for k, n, g, game in H.HEROES]))
+    view.add_item(discord.ui.Button(label="다음: 스타팅 고르기", emoji="▶️", style=discord.ButtonStyle.success, row=1,
+                                    custom_id=cid(uid, 0, "region", hero)))
+    return "", [e], _frozen(view)
+
+
+STARTERS_FILE = "starters.png"
+
+
 def adventure_start_screen(uid, region: str = "관동", hero: str = H.DEFAULT,
                            image: bool = False) -> tuple[str, list[discord.Embed], discord.ui.View]:
-    """모험 시작: 오박사 연구소. 주인공(역대 20명)과 1~9세대 스타팅 27마리 중 하나 (지방을 고르면 그 지방 스타팅 3마리)"""
+    """모험 시작 3단계: 1~9세대 스타팅 27마리 중 하나 (지방을 고르면 그 지방 스타팅 3마리, 그림 한 장에)"""
     region = region if region in REGIONS else "관동"
     hero = H.valid(hero)
     _, hname, hgen, hgame = next(h for h in H.HEROES if h[0] == hero)
     embeds = [discord.Embed(
-        title="🧪 오박사 연구소",
-        description=("오박사: \"오오, 왔구나! 함께 떠날 포켓몬을 골라 보거라. 먼 지방에서 온 포켓몬도 있단다.\"\n\n"
-                     "• 태초마을에서 출발해 관동의 도로와 동굴을 지나며 포켓몬을 잡고 키워요.\n"
-                     "• 체육관 8곳의 배지를 모아 석영고원에서 사천왕과 챔피언에게 도전해요.\n"
-                     "• 관동 챔피언이 되면 파티와 PC를 그대로 데리고 **성도 지방**으로 떠날 수 있어요.\n"
-                     "• 배지가 늘수록 더 높은 레벨까지 말을 들어요. 지면 마지막 포켓몬센터로 돌아가요.\n"
-                     "• 진행은 계속 저장되고, `/초기화`로 처음부터 다시 할 수 있어요.\n\n"
-                     f"주인공: **{hname}** ({hgen}세대 · {hgame}) — 아래 메뉴에서 역대 주인공 중에 고를 수 있어요. "
-                     "모험 중에도 `/주인공`으로 바꿀 수 있어요.\n"
-                     f"지방을 바꾸면 다른 세대 스타팅도 고를 수 있어요. 지금: **{region}**"),
+        title="🧪 스타팅 고르기 (3/3)",
+        description=(f"주인공: **{hname}** ({hgen}세대 · {hgame}) · 모험 중에도 `/주인공`으로 바꿀 수 있어요.\n"
+                     f"함께 떠날 포켓몬을 골라 주세요. 메뉴에서 지방을 바꾸면 다른 세대 스타팅도 고를 수 있어요. "
+                     f"지금: **{region}**"),
         color=0x3BA55D)]
-    if image:   # 설명은 그림(오박사 연구소 + 주인공 고르기)에 들어 있다
-        embeds[0].description = (f"주인공: **{hname}** ({hgen}세대 · {hgame}) · 스타팅 지방: **{region}**\n"
-                                  "아래 메뉴에서 주인공과 지방을 고르고, 버튼으로 함께 떠날 포켓몬을 골라 주세요.")
-        embeds[0].set_image(url=f"attachment://{INTRO_FILE}")
-        embeds.append(discord.Embed(color=0x3BA55D).set_image(url=f"attachment://{HEROES_FILE}"))
+    if image:
+        embeds[0].set_image(url=f"attachment://{STARTERS_FILE}")
     view = discord.ui.View(timeout=None)
     view.add_item(discord.ui.Select(
-        custom_id=cid(uid, 0, "hero", region), placeholder="주인공 고르기", row=1,
-        options=[discord.SelectOption(label=f"{n}", value=k, default=k == hero, description=f"{g}세대 · {game}")
-                 for k, n, g, game in H.HEROES]))
-    view.add_item(discord.ui.Select(
-        custom_id=cid(uid, 0, "region", hero), placeholder="다른 지방 스타팅 보기", row=2,
+        custom_id=cid(uid, 0, "region", hero), placeholder="다른 지방 스타팅 보기", row=1,
         options=[discord.SelectOption(label=f"{i + 1}세대 · {r}", value=r, default=r == region,
                                       description=" / ".join(D.name(x) for x in ids))
                  for i, (r, ids) in enumerate(REGIONS.items())]))
     for sid in REGIONS[region]:
-        st = D.SPECIES[sid]["s"]
-        e = discord.Embed(title=D.name(sid), color=TYPE_COLOR.get(D.types(sid)[0], 0x5865F2),
-                          description=(f"{D.type_text(sid)} 타입 · 종족값 합계 {sum(st)}\n"
-                                       f"HP {st[0]} · 공격 {st[1]} · 방어 {st[2]} · 특공 {st[3]} · 특방 {st[4]} · 스피드 {st[5]}"))
-        e.set_thumbnail(url=D.artwork(sid))
-        embeds.append(e)
+        if not image:   # 그림이 없으면 예전처럼 한 마리씩 글로
+            st = D.SPECIES[sid]["s"]
+            e = discord.Embed(title=D.name(sid), color=TYPE_COLOR.get(D.types(sid)[0], 0x5865F2),
+                              description=(f"{D.type_text(sid)} 타입 · 종족값 합계 {sum(st)}\n"
+                                           f"HP {st[0]} · 공격 {st[1]} · 방어 {st[2]} · 특공 {st[3]} · 특방 {st[4]} · "
+                                           f"스피드 {st[5]}"))
+            e.set_thumbnail(url=D.artwork(sid))
+            embeds.append(e)
         view.add_item(discord.ui.Button(label=D.name(sid), style=discord.ButtonStyle.primary, row=0,
                                         custom_id=cid(uid, 0, "starter", f"{sid}.{hero}")))
+    view.add_item(discord.ui.Button(label="주인공 다시 고르기", emoji="◀️", style=discord.ButtonStyle.secondary, row=2,
+                                    custom_id=cid(uid, 0, "heropick", hero)))
     return "", embeds, _frozen(view)
 
 

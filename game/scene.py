@@ -1108,7 +1108,7 @@ def _intro_height(w: int) -> int:
     return 224 + n * 36 + len(INTRO_LINES) * 8 + 60
 
 
-def _intro(im: Image.Image, d: ImageDraw.ImageDraw, w: int, region: str):
+def _intro(im: Image.Image, d: ImageDraw.ImageDraw, w: int):
     """오박사 연구소 설명 (위쪽): 오박사 대사 창 + 모험 안내"""
     d.text((24, 10), "오박사 연구소", font=TITLE, fill=(255, 220, 72), stroke_width=3, stroke_fill=(40, 32, 96))
     # 오박사 (필드 도트를 6배)
@@ -1137,7 +1137,7 @@ def _intro(im: Image.Image, d: ImageDraw.ImageDraw, w: int, region: str):
             d.text((x0 + 50, y), line, font=FONT, fill=INK)
             y += 36
         y += 8
-    tip = f"스타팅 지방: {region}  ·  메뉴에서 주인공과 지방을 바꿀 수 있어요"
+    tip = "다음으로 넘어가서 주인공과 함께 떠날 포켓몬을 골라요"
     d.text((x0 + 4, y + 18), tip, font=SMALL, fill=(208, 220, 255))
 
 
@@ -1151,11 +1151,11 @@ def _navy(w: int, h: int) -> tuple[Image.Image, ImageDraw.ImageDraw]:
     return im, d
 
 
-def intro(region: str) -> bytes:
-    """모험 시작 화면 위쪽 그림: 오박사 연구소 설명"""
+def intro() -> bytes:
+    """모험 시작 1단계 그림: 오박사 연구소 설명"""
     w = HERO_COLS * HERO_CELL_W + 20
     im, d = _navy(w, _intro_height(w))
-    _intro(im, d, w, region)
+    _intro(im, d, w)
     return _png(im)
 
 
@@ -1191,6 +1191,48 @@ def heroes(selected: str, get_trainer: TrainerGetter | None = None) -> bytes:
         info = f"{hgen}세대 · {hgame}"
         d.text((x0 + HERO_CELL_W // 2 - SMALL.getlength(info) / 2, foot + 36), info, font=SMALL, fill=sub)
     return _png(im)
+
+
+# ---------- 스타팅 고르기 ----------
+STAT_KO = ["HP", "공격", "방어", "특공", "특방", "스피드"]
+
+
+def starters(region: str, sids: list[int], get_sprite: SpriteGetter | None = None) -> bytes:
+    """스타팅 후보 3마리를 카드 한 장씩 (그림·이름·타입·종족값)"""
+    im, d = _canvas()
+    _menu_bg(d)
+    _text(d, (8, 3), f"스타팅 고르기 · {region}", font=BOLD, fill=(255, 220, 72), shadow=(40, 32, 96))
+    hint = "아래 버튼으로 골라요"
+    _text(d, (W - _tw(hint, SMALL) - 8, 5), hint, font=SMALL, fill=(208, 220, 255), shadow=(24, 32, 72))
+    cw = (W - 16) // 3
+    for i, sid in enumerate(sids[:3]):
+        x0, y0, x1, y1 = 6 + i * (cw + 2), 20, 6 + i * (cw + 2) + cw, H - 4
+        t1 = D.types(sid)[0]
+        _panel(d, (x0, y0, x1, y1), fill=(248, 244, 232), edge=(40, 40, 64))
+        d.rectangle((x0 + 1, y0 + 1, x1 - 1, y0 + 4), fill=TYPE_RGB[t1])
+        cx = (x0 + x1) // 2
+        d.ellipse((cx - 30, 78, cx + 30, 88), fill=(220, 216, 200))
+        sp = _sprite(get_sprite, sid, False)
+        im.paste(sp, (cx - sp.width // 2, 84 - sp.height), sp)
+        name = D.name(sid)
+        _text(d, (cx - _tw(name, BOLD) // 2, 90), name, font=BOLD)
+        types = D.types(sid)
+        widths = [_tw(D.TYPE_KO[t]) + 8 for t in types]
+        tx = cx - (sum(widths) + 3 * (len(types) - 1)) // 2
+        for t, w in zip(types, widths):
+            _type_pill(d, tx, 104, t)
+            tx += w + 3
+        st = D.SPECIES[sid]["s"]
+        total = f"종족값 {sum(st)}"
+        _text(d, (cx - _tw(total, SMALL) // 2, 118), total, font=SMALL, fill=(96, 88, 80))
+        for k, (label, v) in enumerate(zip(STAT_KO, st)):
+            y = 130 + k * 9
+            _text(d, (x0 + 4, y - 2), label, font=SMALL, fill=(88, 80, 72))
+            bx0, bx1 = x0 + 30, x1 - 18
+            d.rectangle((bx0, y + 1, bx1, y + 5), fill=(216, 212, 200))
+            d.rectangle((bx0, y + 1, bx0 + max(1, round((bx1 - bx0) * min(1, v / 150))), y + 5), fill=STAT_RGB[k])
+            _text(d, (bx1 + 3, y - 1), str(v), fill=INK)
+    return _finish(im, d)
 
 
 # ---------- 도감 ----------

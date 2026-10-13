@@ -287,15 +287,26 @@ async def heroes_file(hero: str) -> discord.File | None:
         return None
 
 
-async def start_files(hero: str, region: str) -> list[discord.File]:
-    """모험 시작 화면 그림 두 장 (오박사 설명, 주인공 고르기). 하나라도 실패하면 글 화면으로"""
+async def starters_file(region: str) -> discord.File | None:
+    """스타팅 후보 3마리 그림"""
     try:
-        intro = discord.File(io.BytesIO(await asyncio.to_thread(scene.intro, region)), filename=ui.INTRO_FILE)
+        sids = ui.REGIONS[region]
+        await sprites.ensure(sids=sids, timeout=1.0)
+        png = await asyncio.to_thread(scene.starters, region, sids, sprites.get_sprite)
+        return discord.File(io.BytesIO(png), filename=ui.STARTERS_FILE)
+    except Exception as ex:
+        log.warning("스타팅 그림 실패: %s", short_error(ex))
+        return None
+
+
+async def intro_file() -> discord.File | None:
+    """모험 시작 설명 그림 (오박사 연구소)"""
+    try:
+        png = await asyncio.to_thread(scene.intro)
+        return discord.File(io.BytesIO(png), filename=ui.INTRO_FILE)
     except Exception as ex:
         log.warning("시작 화면 그림 실패: %s", short_error(ex))
-        return []
-    roster = await heroes_file(hero)
-    return [intro, roster] if roster else []
+        return None
 
 
 async def start_game(interaction: discord.Interaction, mode: str):
@@ -311,8 +322,10 @@ async def start_game(interaction: discord.Interaction, mode: str):
         return
     files = []
     if mode == "adventure":
-        files = await start_files(H.DEFAULT, "관동")
-        content, embeds, view = ui.adventure_start_screen(slot, image=bool(files))
+        file = await intro_file()
+        files = [file] if file else []
+        content, embeds, view = ui.adventure_intro_screen(slot, image=bool(files))
+        sprites.prefetch(trainers=[k for k, *_ in H.HEROES])
         sprites.prefetch(backs=ui.REGIONS["관동"] + [4, 7, 1])
         title = f"{name}의 관동 모험"
     else:
@@ -469,20 +482,26 @@ async def handle_component(interaction: discord.Interaction, custom_id: str):
         run = await get_run(uid, mode)
 
         # --- 스타팅 고르기 (게임이 없을 때) ---
-        if act in ("starter", "new", "region", "hero"):
+        if act in ("starter", "new", "region", "hero", "heropick"):
             if run and run["phase"] in ACTIVE:
                 await show(interaction, run, _main(slot, name, run))   # 이미 진행 중인 게임이 있으면 그 화면으로
                 return
-            if act in ("region", "hero"):   # 모험 시작: 다른 지방 스타팅 보기 / 주인공 고르기
-                value = (interaction.data.get("values") or [""])[0]
-                region, hero = (value, arg) if act == "region" else (arg, value)
-                hero = H.valid(hero)
-                region = region if region in ui.REGIONS else "관동"
-                files = await start_files(hero, region)
-                content, embeds, view = ui.adventure_start_screen(slot, region, hero, image=bool(files))
-                sprites.prefetch(backs=ui.REGIONS.get(region, []))
+            if act in ("hero", "heropick"):   # 모험 시작 2단계: 주인공 고르기 (메뉴 / 다음·이전 버튼)
+                hero = H.valid((interaction.data.get("values") or [arg])[0] if act == "hero" else arg)
+                file = await heroes_file(hero)
+                content, embeds, view = ui.hero_screen(slot, hero, image=file is not None)
                 await interaction.response.edit_message(content=content or None, embeds=embeds, view=view,
-                                                        attachments=files)
+                                                        attachments=[file] if file else [])
+                sprites.prefetch(sids=ui.REGIONS["관동"], backs=ui.REGIONS["관동"])
+                return
+            if act == "region":   # 모험 시작 3단계: 스타팅 고르기 (다음 버튼 / 다른 지방 메뉴)
+                region = (interaction.data.get("values") or ["관동"])[0]
+                region = region if region in ui.REGIONS else "관동"
+                file = await starters_file(region)
+                content, embeds, view = ui.adventure_start_screen(slot, region, H.valid(arg), image=file is not None)
+                await interaction.response.edit_message(content=content or None, embeds=embeds, view=view,
+                                                        attachments=[file] if file else [])
+                sprites.prefetch(backs=ui.REGIONS[region])
                 return
             if act == "new":   # 데일리·챌린지가 끝난 화면의 버튼
                 await interaction.response.edit_message(view=None)
