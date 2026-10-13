@@ -10,6 +10,7 @@ with gzip.open(_PATH, "rt", encoding="utf-8") as _f:
 
 SPECIES: dict[int, dict] = {int(k): v for k, v in _RAW["species"].items()}
 MOVES: dict[int, dict] = {int(k): v for k, v in _RAW["moves"].items()}
+ITEM_KO: dict[str, str] = _RAW.get("items", {})
 _CHART: dict[tuple[int, int], float] = {
     tuple(map(int, k.split(","))): v for k, v in _RAW["chart"].items()
 }
@@ -21,6 +22,14 @@ TYPE_KO = {
     10: "불꽃", 11: "물", 12: "풀", 13: "전기", 14: "에스퍼", 15: "얼음", 16: "드래곤", 17: "악", 18: "페어리",
 }
 STAT_KO = ["HP", "공격", "방어", "특공", "특방", "스피드"]
+TYPE_EN = {
+    1: "normal", 2: "fighting", 3: "flying", 4: "poison", 5: "ground", 6: "rock", 7: "bug", 8: "ghost", 9: "steel",
+    10: "fire", 11: "water", 12: "grass", 13: "electric", 14: "psychic", 15: "ice", 16: "dragon", 17: "dark", 18: "fairy",
+}
+
+
+def item_name(ident: str) -> str:
+    return ITEM_KO.get(ident, ident)
 
 SPRITE_BASE = "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon"
 

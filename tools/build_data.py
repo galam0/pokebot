@@ -75,6 +75,7 @@ def build(base: Path) -> dict:
             "a": num(r["accuracy"]),          # None = 반드시 명중
             "c": 0 if cls == 2 else 1,        # 0 물리 / 1 특수
             "pr": num(r["priority"], 0),
+            "pp": num(r["pp"], 10) or 10,
         }
         drain = num(m.get("drain"), 0)
         if drain:
@@ -110,25 +111,42 @@ def build(base: Path) -> dict:
 
     species_rows = {num(r["id"]): r for r in rows(base, "pokemon_species.csv") if num(r["id"]) <= MAX_SPECIES}
 
-    evos = defaultdict(list)
-    seen = set()
+    # 진화 방법: ["lv", 레벨] / ["item", 아이템] / ["trade", None] / ["other", None] (친밀도·시간 등)
+    item_ident = {num(r["id"]): r["identifier"] for r in rows(base, "items.csv")}
+    best: dict[int, list] = {}
+    rank = {"lv": 0, "item": 1, "trade": 2, "other": 3}
     for r in rows(base, "pokemon_evolution.csv"):
         child = num(r["evolved_species_id"])
-        if child > MAX_SPECIES or child not in species_rows or child in seen:
+        if child > MAX_SPECIES or child not in species_rows:
             continue
+        trig = num(r["evolution_trigger_id"])
+        if trig == 1 and num(r["minimum_level"]):
+            how = ["lv", num(r["minimum_level"])]
+        elif trig == 3 and num(r["trigger_item_id"]):
+            how = ["item", item_ident[num(r["trigger_item_id"])]]
+        elif trig == 2:
+            how = ["trade", None]
+        else:
+            how = ["other", None]
+        if child not in best or rank[how[0]] < rank[best[child][0]]:
+            best[child] = how
+    evos = defaultdict(list)
+    for child, how in sorted(best.items()):
         parent = num(species_rows[child]["evolves_from_species_id"])
-        if not parent:
-            continue
-        seen.add(child)
-        min_level = num(r["minimum_level"]) if num(r["evolution_trigger_id"]) == 1 else None
-        evos[parent].append([child, min_level])
+        if parent:
+            evos[parent].append([child] + how)
 
     learn = defaultdict(lambda: defaultdict(list))   # pid -> version -> [(lv, move)]
+    machine = defaultdict(lambda: defaultdict(set))  # pid -> version -> {기술머신으로 배울 수 있는 기술}
     for r in rows(base, "pokemon_moves.csv"):
         pid, mid = num(r["pokemon_id"]), num(r["move_id"])
-        if pid > MAX_SPECIES or num(r["pokemon_move_method_id"]) != 1 or mid not in moves:
+        if pid > MAX_SPECIES or mid not in moves:
             continue
-        learn[pid][num(r["version_group_id"])].append((max(1, num(r["level"], 1)), mid))
+        method = num(r["pokemon_move_method_id"])
+        if method == 1:
+            learn[pid][num(r["version_group_id"])].append((max(1, num(r["level"], 1)), mid))
+        elif method == 4:
+            machine[pid][num(r["version_group_id"])].add(mid)
 
     species = {}
     for sid, r in species_rows.items():
@@ -138,6 +156,11 @@ def build(base: Path) -> dict:
         for vg in VERSION_PREF:
             if learn[sid].get(vg):
                 ls = sorted(set(learn[sid][vg]))
+                break
+        tm = []
+        for vg in VERSION_PREF:
+            if machine[sid].get(vg):
+                tm = sorted(machine[sid][vg])
                 break
         species[sid] = {
             "n": species_ko[sid],
@@ -150,6 +173,7 @@ def build(base: Path) -> dict:
             "leg": 1 if (r["is_legendary"] == "1" or r["is_mythical"] == "1") else 0,
             "evo": evos.get(sid, []),
             "ls": [list(x) for x in ls],
+            "tm": tm,
         }
 
     # ---------- 타입 상성 ----------
@@ -159,7 +183,11 @@ def build(base: Path) -> dict:
         if a <= 18 and d <= 18 and f != 100:
             chart[f"{a},{d}"] = f / 100
 
-    return {"moves": moves, "species": species, "chart": chart}
+    # ---------- 아이템 한국어 이름 ----------
+    item_ko = {item_ident[num(r["item_id"])]: r["name"] for r in rows(base, "item_names.csv")
+               if num(r["local_language_id"]) == KO and num(r["item_id"]) in item_ident}
+
+    return {"moves": moves, "species": species, "chart": chart, "items": item_ko}
 
 
 if __name__ == "__main__":

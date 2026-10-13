@@ -153,6 +153,12 @@ def _image(embed: discord.Embed, run: dict, image: bool, file: str = SCENE_FILE)
         _text_status(embed, run)
 
 
+def _move_label(mon: dict, i: int) -> str:
+    m = D.MOVES[mon["moves"][i]]
+    return (f"{m['n']} · {D.TYPE_KO[m['t']]} {'물리' if m['c'] == 0 else '특수'} {m['p']} · "
+            f"PP {mon['pp'][i]}/{E.max_pp(mon, i)}")
+
+
 def battle_screen(uid: int, trainer: str, run: dict, image: bool = True) -> Screen:
     """지금 단계(phase)에 맞는 기본 화면"""
     phase, ver = run["phase"], run.get("ver", 0)
@@ -162,20 +168,26 @@ def battle_screen(uid: int, trainer: str, run: dict, image: bool = True) -> Scre
     if phase == "battle":
         p, e = E.lead(run), run["e"]
         _image(embed, run, image)
+        usable = E.usable_moves(p)
         if p["rc"]:
             _btn(view, "반동으로 쉬기", uid, ver, "move", 0)
+        elif not usable:
+            _btn(view, "발버둥 (PP가 모두 떨어졌어요)", uid, ver, "move", -1, style=B.danger)
         else:
             for i, mid in enumerate(p["moves"]):
                 m = D.MOVES[mid]
                 eff = D.effectiveness(m["t"], D.types(e["sid"]))
                 style = B.success if eff > 1 else B.danger if eff == 0 else B.secondary if eff < 1 else B.primary
-                _btn(view, f"{m['n']} · {D.TYPE_KO[m['t']]} {'물리' if m['c'] == 0 else '특수'} {m['p']}",
-                     uid, ver, "move", i, style=style, row=0 if i < 2 else 1)
+                _btn(view, _move_label(p, i), uid, ver, "move", i, style=style, row=0 if i < 2 else 1,
+                     disabled=i not in usable)
         _btn(view, "가방", uid, ver, "bag", emoji="🎒", row=2)
         _btn(view, "교체", uid, ver, "swmenu", emoji="🔄", row=2, disabled=len(E.alive(run)) < 2)
         _btn(view, "파티", uid, ver, "party", emoji="📋", row=2)
         _btn(view, "포기", uid, ver, "quit", emoji="🏳️", row=2)
-        embed.set_footer(text="초록 버튼은 효과가 굉장한 기술, 회색은 효과가 별로인 기술이에요.")
+        tip = "초록 버튼은 효과가 굉장한 기술, 회색은 효과가 별로인 기술이에요."
+        if p.get("lock") is not None:
+            tip = f"{E.item_name(p['held'])} 때문에 {D.MOVES[p['moves'][p['lock']]]['n']}만 쓸 수 있어요. 교체하면 풀려요."
+        embed.set_footer(text=tip)
         return Screen(embed, _frozen(view))
 
     if phase == "switch":
@@ -200,21 +212,36 @@ def battle_screen(uid: int, trainer: str, run: dict, image: bool = True) -> Scre
         _btn(view, f"새로 잡은 {D.name(new['sid'])} 놓아주기", uid, ver, "relnew", style=B.danger, row=2)
         return Screen(embed, _frozen(view), "party", {"title": f"새 포켓몬: {D.name(new['sid'])} Lv.{new['lv']}"})
 
+    if phase == "learn":
+        li = E.learner(run)
+        m = run["party"][li]
+        new = D.MOVES[m["pend"][0]]
+        name = D.name(m["sid"])
+        embed.title = josa(f"{name}은(는) {new['n']}을(를) 배우고 싶어 한다!")
+        embed.description = josa(
+            f"하지만 {name}은(는) 이미 기술을 4개 알고 있어요. 잊을 기술을 고르세요.\n\n"
+            f"**새 기술 · {new['n']}** {D.TYPE_KO[new['t']]} · {'물리' if new['c'] == 0 else '특수'} {new['p']} · "
+            f"{'명중 ' + str(new['a']) if new['a'] else '반드시 명중'} · PP {new['pp']}")
+        if image:
+            embed.set_image(url=f"attachment://{SUMMARY_FILE}")
+        for j in range(len(m["moves"])):
+            _btn(view, f"잊기: {_move_label(m, j)}", uid, ver, "forget", j, style=B.primary, row=j // 2)
+        _btn(view, f"{new['n']} 배우지 않기", uid, ver, "noforget", style=B.danger, row=2)
+        return Screen(embed, _frozen(view), "summary", {"index": li})
+
     if phase == "reward":
         _image(embed, run, image)
         for i, key in enumerate(run["rewards"]):
-            _btn(view, E.REWARDS[key]["n"], uid, ver, "reward", i, style=B.success, emoji="🎁", row=0)
+            _btn(view, E.reward_info(key, run)["n"], uid, ver, "reward", i, style=B.success, emoji="🎁", row=0)
         cost = E.reroll_cost(run)
         _btn(view, f"다시 뽑기 ₽{cost:,}", uid, ver, "reroll", emoji="🎲", row=1, disabled=run["money"] < cost)
         _btn(view, "상점", uid, ver, "shop", emoji="🛒", row=1)
         _btn(view, "가방", uid, ver, "bag", emoji="🎒", row=1)
         _btn(view, "파티", uid, ver, "party", emoji="📋", row=1)
         _btn(view, "넘어가기", uid, ver, "skip", row=2)
-        if not image:
-            embed.add_field(name="🎁 보상을 하나 고르세요",
-                            value="\n".join(f"**{E.REWARDS[k]['n']}** — {E.REWARDS[k]['d']}" for k in run["rewards"]),
-                            inline=False)
-        embed.set_footer(text="보상을 고르기 전에 가방에서 회복하거나 상점에서 물건을 살 수 있어요.")
+        embed.add_field(name="🎁 보상을 하나 고르세요", value="\n".join(
+            f"**{(r := E.reward_info(k, run))['n']}** — {r['d']}" for k in run["rewards"]) or "-", inline=False)
+        embed.set_footer(text="보상을 고르기 전에 가방에서 회복하거나, 지닌 물건을 주거나, 상점에서 물건을 살 수 있어요.")
         return Screen(embed, _frozen(view))
 
     # over / clear
@@ -243,35 +270,53 @@ def quit_screen(uid: int, trainer: str, run: dict, image: bool = True) -> Screen
 
 
 # ---------- 가방 ----------
-def bag_screen(uid: int, trainer: str, run: dict, image: bool = True) -> Screen:
+def bag_categories(run: dict) -> list[str]:
+    cats = {E.ITEMS[k]["cat"] for k in run["bag"]}
+    return [c for c in E.CAT_ORDER if c in cats]
+
+
+def default_bag_category(run: dict) -> str | None:
+    cats = bag_categories(run)
+    pref = ["ball", "heal", "revive", "pp", "battle", "status"] if run["phase"] == "battle" else \
+        ["held", "evo", "heal", "revive", "pp", "ppup", "status", "ball", "battle"]
+    for c in pref:
+        if c in cats:
+            return c
+    return cats[0] if cats else None
+
+
+def bag_screen(uid: int, trainer: str, run: dict, cat: str | None = None, image: bool = True) -> Screen:
     ver, in_battle = run["ver"], run["phase"] == "battle"
-    embed = _base_embed(trainer, run, title="🎒 가방", color=0xC27C0E)
-    embed.description = ("아이템을 고르세요. 배틀 중에 쓰면 턴을 써요 (상대가 공격해요)." if in_battle
-                         else "보상을 고르기 전이라 턴을 쓰지 않아요.")
+    cats = bag_categories(run)
+    cat = cat if cat in cats else default_bag_category(run)
+    embed = _base_embed(trainer, run, title="🎒 가방" + (f" · {E.CAT_KO[cat]}" if cat else ""), color=0xC27C0E)
+    embed.description = ("배틀 중에 쓰면 턴을 써요 (상대가 공격해요). 지닌 물건·진화·포인트업은 보상을 고를 때 쓸 수 있어요."
+                         if in_battle else "보상을 고르기 전이라 턴을 쓰지 않아요. 볼과 배틀용 아이템은 배틀 중에만 써요.")
     _image(embed, run, image)
     view = discord.ui.View(timeout=None)
-    lines, n = [], 0
-    for item, cnt in sorted(run["bag"].items(), key=lambda kv: list(E.ITEMS).index(kv[0])):
-        it = E.ITEMS[item]
-        lines.append(f"**{it['n']}** x{cnt} — {it['d']}")
-        if E.is_ball(item):
-            ok = in_battle
-            extra = f" ({int(E.catch_chance(run, item) * 100)}%)" if ok else ""
-            if ok and run["e"].get("boss"):
-                extra += " 보스"
-            _btn(view, f"{it['n']} x{cnt}{extra}", uid, ver, "ball", item, style=B.success, row=min(3, n // 3),
-                 disabled=not ok)
-        else:
-            ok = bool(E.item_targets(run, item))
-            _btn(view, f"{it['n']} x{cnt}", uid, ver, "item", item, style=B.primary, row=min(3, n // 3), disabled=not ok)
-        n += 1
-    embed.add_field(name="가지고 있는 아이템", value="\n".join(lines) or "가방이 비어 있어요.", inline=False)
+    if cats:
+        view.add_item(discord.ui.Select(
+            custom_id=cid(uid, ver, "bagcat"), placeholder="종류 고르기", row=0,
+            options=[discord.SelectOption(label=f"{E.CAT_KO[c]} ({sum(v for k, v in run['bag'].items() if E.ITEMS[k]['cat'] == c)})",
+                                          value=c, default=c == cat) for c in cats]))
+    items = [k for k in sorted(run["bag"], key=lambda k: list(E.ITEMS).index(k)) if E.ITEMS[k]["cat"] == cat][:15]
+    lines = []
+    for n, item in enumerate(items):
+        it, cnt = E.ITEMS[item], run["bag"][item]
+        lines.append(f"**{E.item_name(item)}** x{cnt} — {it['d']}")
+        ok = E.item_usable_now(run, item) and (E.is_ball(item) or bool(E.item_targets(run, item)))
+        label = f"{E.item_name(item)} x{cnt}"
+        if E.is_ball(item) and in_battle:
+            label += f" ({int(E.catch_chance(run, item) * 100)}%)"
+        _btn(view, label, uid, ver, "ball" if E.is_ball(item) else "item", item,
+             style=B.success if ok else B.secondary, row=1 + n // 5, disabled=not ok)
+    embed.add_field(name="아이템", value="\n".join(lines)[:1024] or "가방이 비어 있어요.", inline=False)
     _btn(view, "돌아가기", uid, ver, "back", row=4)
     return Screen(embed, _frozen(view))
 
 
 def target_screen(uid: int, trainer: str, run: dict, title: str, act: str, key: str, targets: list[int],
-                  image: bool = True) -> Screen:
+                  image: bool = True, item: str | None = None) -> Screen:
     """아이템이나 보상을 쓸 포켓몬 고르기"""
     ver = run["ver"]
     embed = _base_embed(trainer, run, title=title, color=0x3BA55D)
@@ -281,10 +326,32 @@ def target_screen(uid: int, trainer: str, run: dict, title: str, act: str, key: 
     view = discord.ui.View(timeout=None)
     for i in targets:
         m = run["party"][i]
-        _btn(view, f"{D.name(m['sid'])} Lv.{m['lv']} ({m['hp']}/{E.max_hp(m)})", uid, ver, act, f"{key}.{i}",
-             style=B.primary, row=i // 3)
+        label = f"{D.name(m['sid'])} Lv.{m['lv']} ({m['hp']}/{E.max_hp(m)})"
+        evo_item = item or (key.partition(":")[2] if key.startswith("evo:") else None)
+        if evo_item and E.ITEMS.get(evo_item, {}).get("cat") == "evo" and E.evo_child(m, evo_item):
+            label = f"{D.name(m['sid'])} → {D.name(E.evo_child(m, evo_item))}"
+        elif m.get("held") and (key.startswith("held:") or E.ITEMS.get(item or "", {}).get("cat") == "held"):
+            label += f" · {E.item_name(m['held'])} 들고 있음"
+        _btn(view, label, uid, ver, act, f"{key}.{i}", style=B.primary, row=i // 3)
     _btn(view, "돌아가기", uid, ver, "back", row=2)
     return Screen(embed, _frozen(view), "party", {"title": title, "mark": targets})
+
+
+def move_pick_screen(uid: int, trainer: str, run: dict, item: str, target: int, image: bool = True) -> Screen:
+    """PP에이드·포인트업처럼 기술 하나에 쓰는 아이템: 기술 고르기"""
+    ver = run["ver"]
+    m = run["party"][target]
+    embed = _base_embed(trainer, run, title=f"🎒 {E.item_name(item)} · {D.name(m['sid'])}", color=0x3BA55D)
+    embed.description = "어느 기술에 쓸까요?"
+    if image:
+        embed.set_image(url=f"attachment://{SUMMARY_FILE}")
+    view = discord.ui.View(timeout=None)
+    ok = E.item_moves(run, item, target)
+    for j in range(len(m["moves"])):
+        _btn(view, _move_label(m, j), uid, ver, "itemm", f"{item}.{target}.{j}", style=B.primary, row=j // 2,
+             disabled=j not in ok)
+    _btn(view, "돌아가기", uid, ver, "back", row=2)
+    return Screen(embed, _frozen(view), "summary", {"index": target})
 
 
 def switch_screen(uid: int, trainer: str, run: dict, image: bool = True) -> Screen:
@@ -303,21 +370,33 @@ def switch_screen(uid: int, trainer: str, run: dict, image: bool = True) -> Scre
 
 
 # ---------- 상점 ----------
-def shop_screen(uid: int, trainer: str, run: dict, image: bool = True) -> Screen:
+SHOP_CATS = {"ball": "볼", "heal": "회복", "status": "상태이상·기절", "pp": "PP", "battle": "배틀용"}
+
+
+def _shop_cat(item: str) -> str:
+    c = E.ITEMS[item]["cat"]
+    return "status" if c == "revive" else c
+
+
+def shop_screen(uid: int, trainer: str, run: dict, cat: str | None = None, image: bool = True) -> Screen:
     ver = run["ver"]
-    embed = _base_embed(trainer, run, title=f"🛒 상점 · 소지금 ₽{run['money']:,}", color=0x1ABC9C)
+    cat = cat if cat in SHOP_CATS else "ball"
+    embed = _base_embed(trainer, run, title=f"🛒 상점 · {SHOP_CATS[cat]} · 소지금 ₽{run['money']:,}", color=0x1ABC9C)
     embed.description = "산 물건은 가방에 들어가요. 웨이브가 올라갈수록 조금씩 비싸져요."
     _image(embed, run, image)
     view = discord.ui.View(timeout=None)
+    view.add_item(discord.ui.Select(
+        custom_id=cid(uid, ver, "shopcat"), placeholder="종류 고르기", row=0,
+        options=[discord.SelectOption(label=v, value=k, default=k == cat) for k, v in SHOP_CATS.items()]))
     lines = []
-    for n, item in enumerate(E.SHOP):
+    for n, item in enumerate(i for i in E.SHOP if _shop_cat(i) == cat):
         it, price = E.ITEMS[item], E.shop_price(run, item)
         have = run["bag"].get(item, 0)
-        lines.append(f"**{it['n']}** ₽{price:,} — {it['d']}" + (f" (가지고 있는 수 {have})" if have else ""))
-        _btn(view, f"{it['n']} ₽{price:,}", uid, ver, "buy", item, style=B.primary, row=n // 4,
+        lines.append(f"**{E.item_name(item)}** ₽{price:,} — {it['d']}" + (f" (가지고 있는 수 {have})" if have else ""))
+        _btn(view, f"{E.item_name(item)} ₽{price:,}", uid, ver, "buy", item, style=B.primary, row=1 + n // 4,
              disabled=run["money"] < price)
-    embed.add_field(name="팔고 있는 물건", value="\n".join(lines), inline=False)
-    _btn(view, "돌아가기", uid, ver, "back", row=2)
+    embed.add_field(name="팔고 있는 물건", value="\n".join(lines)[:1024], inline=False)
+    _btn(view, "돌아가기", uid, ver, "back", row=4)
     return Screen(embed, _frozen(view))
 
 
@@ -325,14 +404,13 @@ def shop_screen(uid: int, trainer: str, run: dict, image: bool = True) -> Screen
 def party_screen(uid: int, trainer: str, run: dict, image: bool = True) -> Screen:
     """📋 파티 (본인에게만 보이는 메시지). 버튼으로 한 마리씩 자세히 볼 수 있다."""
     embed = discord.Embed(title=f"📋 {trainer} 트레이너의 파티", color=0x5865F2)
-    bag = ", ".join(f"{E.ITEMS[k]['n']} {v}" for k, v in run["bag"].items()) or "비어 있음"
     embed.description = (f"소지금 ₽{run['money']:,} · 웨이브 {run['wave']} · 잡은 포켓몬 {run.get('caught', 0)}마리\n"
-                         f"가방: {bag}")
+                         f"가방: 아이템 {sum(run['bag'].values())}개 ({', '.join(E.CAT_KO[c] for c in bag_categories(run)) or '비어 있음'})")
     if image:
         embed.set_image(url=f"attachment://{SCENE_FILE}")
-    else:
-        embed.add_field(name="파티", value="\n".join(
-            f"{i + 1}. {D.name(m['sid'])} Lv.{m['lv']} {hp_line(m)}" for i, m in enumerate(run["party"])), inline=False)
+    embed.add_field(name="파티", value="\n".join(
+        f"{i + 1}. {D.name(m['sid'])} Lv.{m['lv']}" + ("" if image else f" {hp_line(m)}")
+        + (f" · 🎒 {E.item_name(m['held'])}" if m.get("held") else "") for i, m in enumerate(run["party"])), inline=False)
     view = discord.ui.View(timeout=None)
     for i, m in enumerate(run["party"]):
         _btn(view, f"{i + 1}. {D.name(m['sid'])}", uid, 0, "info", i, row=i // 3)
@@ -364,18 +442,23 @@ def mon_detail(trainer: str, run: dict, index: int | None = None, image: bool = 
             extra.append(f"{m['ai'][1]}% {E.STATUS_KO[E.AILMENT[m['ai'][0]]]}")
         if m.get("pr", 0) > 0:
             extra.append("선공")
-        moves.append(f"**{m['n']}** {D.TYPE_KO[m['t']]} · {'물리' if m['c'] == 0 else '특수'} {m['p']} · {acc}"
-                     + (f" · {', '.join(extra)}" if extra else ""))
+        j = len(moves)
+        moves.append(f"**{m['n']}** {D.TYPE_KO[m['t']]} · {'물리' if m['c'] == 0 else '특수'} {m['p']} · {acc} · "
+                     f"PP {p['pp'][j]}/{E.max_pp(p, j)}" + (f" · {', '.join(extra)}" if extra else ""))
     e.add_field(name="기술", value="\n".join(moves), inline=False)
     nxt = [(l, mid) for l, mid in D.SPECIES[p["sid"]]["ls"] if l > p["lv"]][:3]
-    evo = [(c, ml) for c, ml in D.SPECIES[p["sid"]]["evo"] if ml]
+    evo = D.SPECIES[p["sid"]]["evo"]
     tips = []
     if nxt:
         tips.append("다음에 배울 기술: " + ", ".join(f"Lv.{l} {D.MOVES[mid]['n']}" for l, mid in nxt))
     if evo:
-        tips.append("진화: " + ", ".join(f"Lv.{ml} {D.name(c)}" for c, ml in evo))
+        how_ko = {"lv": lambda v: f"Lv.{v}", "item": lambda v: E.item_name(v), "trade": lambda v: "연결의끈",
+                  "other": lambda v: f"Lv.{E.OTHER_EVO_LEVEL}"}
+        tips.append("진화: " + ", ".join(f"{how_ko[how](val)} → {D.name(c)}" for c, how, val in evo))
     if run.get("exp_mult", 1) > 1:
         tips.append(f"학습장치: 경험치 {int(run['exp_mult'] * 100)}%")
+    if p.get("held"):
+        e.add_field(name="지닌 물건", value=f"**{E.item_name(p['held'])}** — {E.HELD[p['held']]}", inline=False)
     if tips:
         e.add_field(name="앞으로", value="\n".join(tips), inline=False)
     if image:

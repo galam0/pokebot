@@ -431,6 +431,9 @@ def summary(run: dict, get_sprite: SpriteGetter | None = None, index: int | None
     x = 12
     for t in D.types(p["sid"]):
         x += _type_pill(d, x, 112, t) + 3
+    if p.get("held"):
+        h = E.item_name(p["held"])
+        _text(d, (108 - _tw(h), 28), h, fill=(120, 88, 24))
 
     # 오른쪽: 이름, HP, EXP, 능력치
     _panel(d, (116, 22, 314, 133))
@@ -464,6 +467,8 @@ def summary(run: dict, get_sprite: SpriteGetter | None = None, index: int | None
         col = TYPE_RGB[m["t"]]
         _panel(d, (x0, y0, x0 + 152, y0 + 26), fill=tuple(min(255, c // 4 + 190) for c in col), edge=tuple(max(0, c - 60) for c in col))
         _text(d, (x0 + 5, y0 + 2), m["n"], font=BOLD)
+        pp = f"PP {p['pp'][i]}/{E.max_pp(p, i)}"
+        _text(d, (x0 + 148 - _tw(pp), y0 + 2), pp, fill=(200, 48, 48) if p["pp"][i] == 0 else INK)
         _type_pill(d, x0 + 5, y0 + 13, m["t"])
         info = f"{'물리' if m['c'] == 0 else '특수'} {m['p']}" + (f" 명중{m['a']}" if m["a"] and m["a"] < 100 else "")
         _text(d, (x0 + 148 - _tw(info), y0 + 14), info)
@@ -471,17 +476,17 @@ def summary(run: dict, get_sprite: SpriteGetter | None = None, index: int | None
 
 
 # ---------- 보상 화면 ----------
-REWARD_ICON = {   # 보상 → PokeAPI 아이템 스프라이트 이름
-    "balls": "poke-ball", "great": "great-ball", "ultra": "ultra-ball", "master": "master-ball",
-    "potion": "potion", "superpot": "super-potion", "fullrest": "full-restore", "revive": "revive",
-    "candy": "rare-candy", "candy3": "rare-candy", "hpup": "hp-up", "protein": "protein", "iron": "iron",
-    "calcium": "calcium", "zinc": "zinc", "carbos": "carbos", "expcharm": "exp-share", "nugget": "nugget",
-}
-ITEM_ICON = {   # 가방 아이템 → 스프라이트 이름
-    "pokeball": "poke-ball", "greatball": "great-ball", "ultraball": "ultra-ball", "masterball": "master-ball",
-    "potion": "potion", "superpot": "super-potion", "fullrest": "full-restore", "fullheal": "full-heal",
-    "revive": "revive",
-}
+ICON_FALLBACK = {"fairy-feather": "pixie-plate", "linking-cord": "up-grade"}   # 그림이 없는 아이템
+
+
+def item_icon(item: str) -> str:
+    return ICON_FALLBACK.get(item, item)
+
+
+def reward_icon(key: str) -> str:
+    return item_icon(E.reward_info(key)["icon"])
+
+
 ItemGetter = Callable[[str], Image.Image | None]
 
 
@@ -508,7 +513,7 @@ def rewards(run: dict, get_sprite: SpriteGetter | None = None, get_item: ItemGet
     money = f"₽{run.get('money', 0):,}"
     _text(d, (W - _tw(money, BOLD) - 8, 5), money, font=BOLD, fill=(255, 255, 255), shadow=(16, 24, 40))
     for i, key in enumerate(run["rewards"][:3]):
-        r = E.REWARDS[key]
+        r = E.reward_info(key, run)
         x0 = 8 + i * 103
         _panel(d, (x0, 30, x0 + 98, 120), fill=(248, 248, 240))
         d.rectangle((x0 + 1, 31, x0 + 97, 42), fill=(232, 224, 200))
@@ -516,7 +521,7 @@ def rewards(run: dict, get_sprite: SpriteGetter | None = None, get_item: ItemGet
         icon = None
         if get_item:
             try:
-                icon = get_item(REWARD_ICON[key])
+                icon = get_item(reward_icon(key))
             except Exception:
                 icon = None
         if icon is not None:

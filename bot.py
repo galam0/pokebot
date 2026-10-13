@@ -127,7 +127,7 @@ class PokeBot(discord.Client):
 bot = PokeBot()
 
 
-ACTIVE = ("battle", "reward", "switch", "replace")
+ACTIVE = ("battle", "reward", "switch", "replace", "learn")
 
 
 async def get_run(uid: int) -> dict | None:
@@ -155,7 +155,7 @@ async def render(run: dict, kind: str = "scene", **kwargs) -> discord.File | Non
             name = ui.SUMMARY_FILE
         elif run["phase"] == "reward":
             await sprites.ensure(sids=_party_sids(run),
-                                 items=[scene.REWARD_ICON[k] for k in run.get("rewards", [])], timeout=1.0)
+                                 items=[scene.reward_icon(k) for k in run.get("rewards", [])], timeout=1.0)
             png = await asyncio.to_thread(scene.rewards, run, sprites.get_sprite, sprites.get_item)
             name = ui.SCENE_FILE
         else:
@@ -170,7 +170,7 @@ async def render(run: dict, kind: str = "scene", **kwargs) -> discord.File | Non
 
 def prefetch_next(run: dict):
     """응답을 보낸 뒤, 다음에 필요할 그림을 미리 받아 둔다."""
-    evos = [c for m in run["party"] for c, _ in D.SPECIES[m["sid"]]["evo"]]
+    evos = [c for m in run["party"] for c, *_ in D.SPECIES[m["sid"]]["evo"]]
     nxt = (run.get("next_e") or {}).get("mon")
     sprites.prefetch(sids=([nxt["sid"]] if nxt else []) + _party_sids(run), backs=evos + _party_sids(run))
 
@@ -226,7 +226,7 @@ async def handle_component(interaction: discord.Interaction, custom_id: str):
                 region = (interaction.data.get("values") or [""])[0]
                 content, embeds, view = ui.starter_screen(uid, region)
                 ids = ui.REGIONS.get(region, [])
-                sprites.prefetch(backs=ids + [c for s in ids for c, _ in D.SPECIES[s]["evo"]])
+                sprites.prefetch(backs=ids + [c for s in ids for c, *_ in D.SPECIES[s]["evo"]])
             elif act == "starter":
                 run = E.new_run(int(arg), rng)
                 run["ver"] = 1
@@ -264,13 +264,18 @@ async def handle_component(interaction: discord.Interaction, custom_id: str):
 
         phase = run["phase"]
         # --- 메뉴 열기 (게임 상태는 그대로) ---
+        if act in ("bagcat", "shopcat"):   # 종류 고르기 (선택 메뉴)
+            arg = (interaction.data.get("values") or [""])[0]
+            act = act[:-3]
         menus = {
             "quit": lambda image: ui.quit_screen(uid, name, run, image),
-            "bag": lambda image: ui.bag_screen(uid, name, run, image),
+            "bag": lambda image: ui.bag_screen(uid, name, run, arg or None, image),
             "swmenu": lambda image: ui.switch_screen(uid, name, run, image),
-            "shop": lambda image: ui.shop_screen(uid, name, run, image),
+            "shop": lambda image: ui.shop_screen(uid, name, run, arg or None, image),
             "back": _main(uid, name, run),
         }
+        if act == "bag" and phase not in ("battle", "reward"):
+            act = "back"
         if act in menus:
             if act == "swmenu" and (phase != "battle" or len(E.alive(run)) < 2):
                 act = "back"
@@ -279,35 +284,38 @@ async def handle_component(interaction: discord.Interaction, custom_id: str):
             await show(interaction, run, menus[act])
             return
         if act == "item" and arg in run["bag"] and not E.is_ball(arg):
-            targets = E.item_targets(run, arg)
+            targets = E.item_targets(run, arg) if E.item_usable_now(run, arg) else []
             if not targets:
                 return await notify_failure(interaction, "지금 쓸 수 있는 포켓몬이 없어요.")
-            title = f"🎒 {E.ITEMS[arg]['n']}"
-            await show(interaction, run, lambda image: ui.target_screen(uid, name, run, title, "itemt", arg, targets, image))
+            title = f"🎒 {E.item_name(arg)}"
+            await show(interaction, run,
+                       lambda image: ui.target_screen(uid, name, run, title, "itemt", arg, targets, image, item=arg))
             return
+        if act == "itemt" and phase in ("battle", "reward"):
+            item, _, t = arg.rpartition(".")
+            if item in run["bag"] and t.isdigit() and E.item_moves(run, item, int(t)):
+                await show(interaction, run, lambda image: ui.move_pick_screen(uid, name, run, item, int(t), image))
+                return
         if act == "reward" and phase == "reward" and arg.isdigit() and int(arg) < len(run["rewards"]):
             key = run["rewards"][int(arg)]
-            if E.REWARDS[key]["kind"] == "target":
+            if E.needs_target(key):
                 targets = E.reward_targets(run, key)
                 if not targets:
                     return await notify_failure(interaction, "이 보상을 쓸 수 있는 포켓몬이 없어요. 다른 보상을 골라 주세요.")
-                title = f"🎁 {E.REWARDS[key]['n']}"
+                title = f"🎁 {E.reward_info(key, run)['n']}"
                 await show(interaction, run,
                            lambda image: ui.target_screen(uid, name, run, title, "rewardt", arg, targets, image))
                 return
 
         # --- 게임 상태를 바꾸는 동작 ---
         stay = None   # 바뀐 뒤 보여줄 메뉴 (없으면 기본 화면)
+        shop_cat = ui._shop_cat(arg) if act == "buy" and arg in E.ITEMS else None
         try:
             if act == "quitok":
                 run["log"] = ["🏳️ 게임을 포기했다."]
                 run["phase"] = "over"
             elif act == "move" and phase == "battle":
-                p = E.lead(run)
-                idx = int(arg)
-                if not p["rc"] and not 0 <= idx < len(p["moves"]):
-                    return await notify_failure(interaction, "그 기술은 이제 없어요.")
-                E.take_turn(run, idx, rng)
+                E.take_turn(run, int(arg), rng)
             elif act == "sw" and phase in ("battle", "switch"):
                 E.switch(run, int(arg), rng)
             elif act == "ball" and phase == "battle":
@@ -315,6 +323,13 @@ async def handle_component(interaction: discord.Interaction, custom_id: str):
             elif act == "itemt" and phase in ("battle", "reward"):
                 item, t = arg.rsplit(".", 1)
                 E.use_item(run, item, int(t), rng)
+            elif act == "itemm" and phase in ("battle", "reward"):
+                item, t, j = arg.rsplit(".", 2)
+                E.use_item(run, item, int(t), rng, move_index=int(j))
+            elif act == "forget" and phase == "learn":
+                E.resolve_learn(run, int(arg), rng)
+            elif act == "noforget" and phase == "learn":
+                E.resolve_learn(run, None, rng)
             elif act == "reward" and phase == "reward":
                 E.choose_reward(run, int(arg), rng)
             elif act == "rewardt" and phase == "reward":
@@ -341,7 +356,7 @@ async def handle_component(interaction: discord.Interaction, custom_id: str):
 
         run["ver"] = run.get("ver", 0) + 1
         if stay == "shop":
-            await show(interaction, run, lambda image: ui.shop_screen(uid, name, run, image))
+            await show(interaction, run, lambda image: ui.shop_screen(uid, name, run, shop_cat, image))
         else:
             await show(interaction, run, _main(uid, name, run))
 

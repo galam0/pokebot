@@ -17,8 +17,9 @@ STARTERS = [1, 4, 7, 152, 155, 158, 252, 255, 258, 387, 390, 393, 495, 498, 501,
 
 
 def power(mon, enemy):
-    """mon이 enemy에게 줄 수 있는 최대 기대 데미지 비율"""
-    return max(E._expected(mon, enemy, m) for m in mon["moves"]) / max(1, enemy["hp"])
+    """mon이 enemy에게 줄 수 있는 최대 기대 데미지 비율 (PP 남은 기술만)"""
+    idx = E.usable_moves(mon) or [-1]
+    return max(E._expected(mon, enemy, mon["moves"][i] if i >= 0 else -1) for i in idx) / max(1, enemy["hp"])
 
 
 def best_member(run, exclude=None):
@@ -27,18 +28,28 @@ def best_member(run, exclude=None):
     return max(cands, key=lambda i: power(run["party"][i], e) * (run["party"][i]["hp"] / E.max_hp(run["party"][i])) ** 0.5)
 
 
+BALLS = ("ultra-ball", "great-ball", "net-ball", "timer-ball", "quick-ball", "poke-ball", "heal-ball")
+HEALS = ("hyper-potion", "super-potion", "moomoo-milk", "lemonade", "soda-pop", "fresh-water", "potion", "max-potion",
+         "full-restore")
+
+
 def battle_action(run, rng):
     p, e = E.lead(run), run["e"]
     bag = run["bag"]
     # 포획: 보스가 아니고 파티에 자리가 있으면, 상대 HP가 적당히 깎였을 때
     if len(run["party"]) < E.MAX_PARTY and not e["boss"] and e["hp"] < E.max_hp(e) * 0.6:
-        for ball in ("ultraball", "greatball", "pokeball"):
+        for ball in BALLS:
             if bag.get(ball) and E.catch_chance(run, ball) > 0.25:
                 return E.throw_ball(run, ball, rng)
     # 회복
     if p["hp"] < E.max_hp(p) * 0.3 and not p["rc"]:
-        for it in ("superpot", "potion", "fullrest"):
+        for it in HEALS:
             if bag.get(it) and run["active"] in E.item_targets(run, it):
+                return E.use_item(run, it, run["active"], rng)
+    # PP가 바닥나면 PP 회복
+    if not E.usable_moves(p) and not p["rc"]:
+        for it in ("max-elixir", "elixir"):
+            if bag.get(it):
                 return E.use_item(run, it, run["active"], rng)
     # 상성이 나쁘면 교체
     if len(E.alive(run)) > 1 and not p["rc"]:
@@ -48,44 +59,72 @@ def battle_action(run, rng):
     return E.take_turn(run, E.best_move_index(p, e) if not p["rc"] else 0, rng)
 
 
-def reward_action(run, rng):
-    # 가방으로 회복 (보상 중에는 턴을 안 씀)
-    for it in ("revive", "superpot", "potion"):
-        while run["bag"].get(it):
-            ts = [i for i in E.item_targets(run, it)
-                  if it == "revive" or run["party"][i]["hp"] < E.max_hp(run["party"][i]) * 0.6]
+def _use_all(run, rng):
+    """보상 단계: 가방으로 회복 (턴을 안 씀)"""
+    for it in ("max-revive", "revive", "sacred-ash") + HEALS + ("full-heal", "max-elixir", "elixir"):
+        guard = 0
+        while run["bag"].get(it) and guard < 6:
+            guard += 1
+            ts = E.item_targets(run, it)
+            if E.ITEMS[it]["cat"] == "heal":
+                ts = [i for i in ts if run["party"][i]["hp"] < E.max_hp(run["party"][i]) * 0.6]
+            if E.ITEMS[it]["cat"] == "pp":
+                ts = [i for i in ts if any(m <= 3 for m in run["party"][i]["pp"])]
             if not ts:
                 break
             E.use_item(run, it, ts[0], rng)
+    # 지닌 물건: 가방에 있으면 아무것도 안 든 포켓몬에게
+    for it in [k for k in list(run["bag"]) if E.ITEMS[k]["cat"] in ("held", "evo")]:
+        ts = [i for i in E.item_targets(run, it) if E.ITEMS[it]["cat"] == "evo" or not run["party"][i].get("held")]
+        if ts and run["bag"].get(it):
+            E.use_item(run, it, ts[0], rng)
+
+
+def reward_action(run, rng):
+    _use_all(run, rng)
+    if run["phase"] != "reward":
+        return
     # 상점
-    if len(run["party"]) < E.MAX_PARTY and run["bag"].get("pokeball", 0) + run["bag"].get("greatball", 0) < 3:
-        while run["money"] >= E.shop_price(run, "pokeball") + 500 and run["bag"].get("pokeball", 0) < 5:
-            E.buy(run, "pokeball")
-    if not run["bag"].get("superpot") and run["money"] >= E.shop_price(run, "superpot") + 300:
-        E.buy(run, "superpot")
+    if len(run["party"]) < E.MAX_PARTY and run["bag"].get("poke-ball", 0) + run["bag"].get("great-ball", 0) < 3:
+        while run["money"] >= E.shop_price(run, "poke-ball") + 500 and run["bag"].get("poke-ball", 0) < 5:
+            E.buy(run, "poke-ball")
+    if not run["bag"].get("super-potion") and run["money"] >= E.shop_price(run, "super-potion") + 300:
+        E.buy(run, "super-potion")
     if not run["bag"].get("revive") and run["money"] >= E.shop_price(run, "revive") + 300:
         E.buy(run, "revive")
-    # 보상 고르기
-    order = ["master", "candy3", "revive", "ultra", "great", "balls", "candy", "expcharm", "superpot",
-             "protein", "calcium", "carbos", "hpup", "iron", "zinc", "fullrest", "potion", "nugget"]
-    for k in order:
-        if k in run["rewards"]:
-            idx = run["rewards"].index(k)
-            target = None
-            if E.REWARDS[k]["kind"] == "target":
-                ts = E.reward_targets(run, k)
-                if not ts:
-                    continue
-                target = max(ts, key=lambda i: run["party"][i]["lv"]) if "vit" in E.REWARDS[k] else \
-                    min(ts, key=lambda i: run["party"][i]["lv"])
-            return E.choose_reward(run, idx, rng, target)
+    # 보상 고르기 (점수가 높은 것)
+    def score(k):
+        kind = k.partition(":")[0]
+        base = {"tm": 7, "evo": 9, "held": 6}.get(kind)
+        if base is None:
+            base = {"master": 10, "candy3": 9, "maxrevive": 8, "revive": 7, "ultra": 6, "great": 5, "balls": 5,
+                    "candy": 6, "expcharm": 6, "sacred": 7}.get(k, 3)
+        return base
+    for k in sorted(run["rewards"], key=score, reverse=True):
+        idx = run["rewards"].index(k)
+        target = None
+        if E.needs_target(k):
+            ts = E.reward_targets(run, k)
+            if not ts:
+                continue
+            target = max(ts, key=lambda i: run["party"][i]["lv"]) if k.startswith(("held", "tm")) or "vit" in E.REWARDS.get(k, {}) \
+                else min(ts, key=lambda i: run["party"][i]["lv"])
+        return E.choose_reward(run, idx, rng, target)
     return E.skip_reward(run, rng)
+
+
+def learn_action(run, rng):
+    m = run["party"][E.learner(run)]
+    new = m["pend"][0]
+    vals = [E._move_value(m, x) for x in m["moves"]]
+    worst = vals.index(min(vals))
+    E.resolve_learn(run, worst if E._move_value(m, new) > vals[worst] else None, rng)
 
 
 def play(starter, rng):
     run = E.new_run(starter, rng)
     steps = 0
-    while run["phase"] in ("battle", "reward", "switch", "replace"):
+    while run["phase"] in ("battle", "reward", "switch", "replace", "learn"):
         steps += 1
         if steps > 20000:
             break
@@ -94,6 +133,8 @@ def play(starter, rng):
             battle_action(run, rng)
         elif ph == "switch":
             E.switch(run, best_member(run), rng)
+        elif ph == "learn":
+            learn_action(run, rng)
         elif ph == "replace":
             new = run["pending"]["mon"]
             weakest = min(range(len(run["party"])), key=lambda i: D.bst(run["party"][i]["sid"]) + run["party"][i]["lv"] * 3)
