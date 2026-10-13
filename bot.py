@@ -256,6 +256,7 @@ async def show(interaction: discord.Interaction, run: dict, make, send: bool = F
                content: str | None = None):
     """make(image: bool) -> ui.Screen 를 그림과 함께 보여준다 (send=False면 지금 메시지를 바꿈)"""
     probe = make(True)
+    seq = _screen_seq[interaction.user.id] = _screen_seq.get(interaction.user.id, 0) + 1
     file = await render(run, probe.image, **probe.image_args)
     sc = probe if file else make(False)
     if file and sc.embed.image and sc.embed.image.url != f"attachment://{file.filename}":
@@ -269,21 +270,25 @@ async def show(interaction: discord.Interaction, run: dict, make, send: bool = F
                                                 attachments=[file] if file else [])
     prefetch_next(run)
     if file and probe.image == "scene" and _is_battle_scene(run):   # 버튼은 이미 나갔고, 움직이는 그림은 뒤에서
-        _bg(_animate(interaction, run, sc.embed, run.get("ver", 0)), "배틀 GIF")
+        _bg(_animate(interaction, run, sc.embed, seq), "배틀 GIF")
+
+
+_screen_seq: dict[int, int] = {}   # 유저 -> 마지막으로 보여 준 화면 번호 (가방·교체 메뉴는 ver가 안 바뀌어서 따로 센다)
 
 
 def _is_battle_scene(run: dict) -> bool:
     return run["phase"] not in ("field", "reward") and not (run.get("battle") or {}).get("intro")
 
 
-async def _animate(interaction: discord.Interaction, run: dict, embed: discord.Embed, ver: int):
-    """배틀 화면의 멈춘 그림을 움직이는 GIF로 바꿔 끼운다. 그사이 다음 턴으로 넘어갔으면 버린다."""
+async def _animate(interaction: discord.Interaction, run: dict, embed: discord.Embed, seq: int):
+    """배틀 화면의 멈춘 그림을 움직이는 GIF로 바꿔 끼운다. 그사이 화면이 바뀌었으면(다음 턴·가방 등) 버린다."""
+    uid = interaction.user.id
     p, e = E.lead(run), run.get("e")
     await sprites.ensure(anims=[e["sid"]] if e else [], anim_backs=[p["sid"]], timeout=4.0)
-    if run.get("ver", 0) != ver:   # 그림을 받는 사이에 다음 턴으로 넘어갔다
+    if _screen_seq.get(uid) != seq:   # 그림을 받는 사이에 화면이 바뀌었다
         return
     gif = await render(run, "scene", animate=True)
-    if not gif or run.get("ver", 0) != ver:
+    if not gif or _screen_seq.get(uid) != seq:
         return
     embed = embed.copy()
     embed.set_image(url=f"attachment://{gif.filename}")
@@ -311,13 +316,19 @@ async def post_in_thread(interaction: discord.Interaction, thread_name: str, con
         try:
             thread = await ch.create_thread(name=thread_name[:90], type=discord.ChannelType.public_thread,
                                             auto_archive_duration=1440)
-            await thread.send(content=content, embeds=embeds, view=view, **kwargs)
-            await interaction.response.send_message(f"🎮 {thread.mention} 에서 게임을 시작했어요!", ephemeral=True)
-            return
         except Exception as ex:   # 권한이 없으면 지금 채널에서
             log.info("스레드를 못 만들어서 채널에 올려요: %s", short_error(ex))
-            for f in files:
-                f.reset()
+        else:
+            # 3초 제한: 그림 올리기(느림)보다 응답을 먼저 보낸다
+            await interaction.response.send_message(f"🎮 {thread.mention} 에서 게임을 시작했어요!", ephemeral=True)
+            try:
+                await thread.send(content=content, embeds=embeds, view=view, **kwargs)
+            except Exception as ex:
+                log.warning("스레드에 올리기 실패: %s", short_error(ex))
+                for f in files:
+                    f.reset()
+                await thread.send(content=content, embeds=embeds, view=view, **kwargs)
+            return
     await interaction.response.send_message(content=content, embeds=embeds, view=view, **kwargs)
 
 
