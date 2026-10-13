@@ -25,6 +25,7 @@ from . import data as D
 MAX_LEVEL = 100
 FINAL_WAVE = 100
 BIOME_SIZE = 10         # 10웨이브마다 보스 + 새 지역(전체 회복)
+WAVE_EXP = 1.5       # 웨이브 게임은 싸운 포켓몬만 받는 대신 경험치를 조금 더
 WIN_HEAL = 0.15         # 이길 때마다 살아 있는 파티 포켓몬 HP 15% 회복
 LEVEL_PER_WAVE = 0.85   # 웨이브당 상대 레벨 증가
 MONEY_BASE = 100        # 웨이브 보상 돈 = MONEY_BASE + 웨이브 × MONEY_PER_WAVE (보스 2.5배)
@@ -1251,11 +1252,12 @@ def win(run: dict, rng: random.Random, caught: bool = False) -> list[str]:
     for i, m in enumerate(run["party"]):
         if m["hp"] <= 0:
             continue
-        if i in fought:
-            amount = exp_gain(m, e, run.get("exp_mult", 1.0))
-            if m["lv"] < level_cap(m):
-                msgs.append(f"{D.name(m['sid'])}은(는) 경험치 **{amount}**을(를) 얻었다!")
-            msgs.extend(gain_exp(m, amount))
+        amount = exp_gain(m, e, run.get("exp_mult", 1.0) * WAVE_EXP)
+        if i not in fought:   # 웨이브 게임은 학습장치가 늘 켜져 있다: 안 나온 포켓몬은 절반
+            amount = max(1, amount // 2)
+        if m["lv"] < level_cap(m):
+            msgs.append(f"{D.name(m['sid'])}은(는) 경험치 **{amount}**을(를) 얻었다!")
+        msgs.extend(gain_exp(m, amount))
         _reset_battle_state(m)
         if WIN_HEAL and run.get("rule") != "hardcore" and m["hp"] < max_hp(m):
             m["hp"] = min(max_hp(m), m["hp"] + int(max_hp(m) * WIN_HEAL))
