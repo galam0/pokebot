@@ -333,4 +333,4 @@ async def my_pokemon(interaction: discord.Interaction):
 if __name__ == "__main__":
     if not TOKEN:
         raise SystemExit("DISCORD_TOKEN 환경변수를 설정해 주세요 (.env 파일 참고)")
-    bot.run(TOKEN)
+    bot.run(TOKEN, root_logger=True)  # pokebot 로그도 discord 로그와 같이 출력
