@@ -431,7 +431,10 @@ async def menu_action(interaction: discord.Interaction, act: str):
     elif act == "records":
         await send_records(interaction, ephemeral=True)
     elif act == "help":
-        await interaction.response.send_message(embed=ui.help_embed(), ephemeral=True)
+        await interaction.response.send_message(embed=ui.help_embed(), view=ui.help_view(uid), ephemeral=True)
+    elif act == "helpt":   # 도움말 주제 바꾸기
+        topic = (interaction.data.get("values") or ["start"])[0]
+        await interaction.response.edit_message(embed=ui.help_embed(topic), view=ui.help_view(uid, topic))
     else:
         await interaction.response.send_message("알 수 없는 메뉴예요.", ephemeral=True)
 
@@ -788,6 +791,11 @@ async def hero_cmd(interaction: discord.Interaction, 주인공: app_commands.Cho
     file = await heroes_file(run["hero"])
     kwargs = {"file": file} if file else {}
     await interaction.response.send_message(josa(f"주인공을 **{H.NAMES[run['hero']]}**(으)로 바꿨어요!"), ephemeral=True, **kwargs)
+
+
+@bot.tree.command(name="도움말", description="게임 방법과 명령어 안내")
+async def help_cmd(interaction: discord.Interaction):
+    await menu_action(interaction, "help")
 
 
 @bot.tree.command(name="초기화", description="관동 모험을 처음부터 다시 시작해요 (확인 버튼이 나와요)")
