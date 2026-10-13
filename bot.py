@@ -258,10 +258,10 @@ async def send_summary(interaction: discord.Interaction, run: dict, index: int |
 
 # ---------- 스레드 ----------
 async def post_in_thread(interaction: discord.Interaction, thread_name: str, content: str | None,
-                         embeds: list[discord.Embed], view: discord.ui.View, file: discord.File | None = None):
+                         embeds: list[discord.Embed], view: discord.ui.View, files: list[discord.File] = ()):
     """게임 전용 스레드를 만들어 그 안에 올린다. 스레드를 못 만들면(권한·DM 등) 지금 채널에 바로 올린다."""
     ch = interaction.channel
-    kwargs = {"file": file} if file else {}
+    kwargs = {"files": list(files)} if files else {}
     if isinstance(ch, discord.TextChannel):
         try:
             thread = await ch.create_thread(name=thread_name[:90], type=discord.ChannelType.public_thread,
@@ -271,20 +271,31 @@ async def post_in_thread(interaction: discord.Interaction, thread_name: str, con
             return
         except Exception as ex:   # 권한이 없으면 지금 채널에서
             log.info("스레드를 못 만들어서 채널에 올려요: %s", short_error(ex))
-            if file:
-                file.reset()
+            for f in files:
+                f.reset()
     await interaction.response.send_message(content=content, embeds=embeds, view=view, **kwargs)
 
 
-async def heroes_file(hero: str, region: str | None = None) -> discord.File | None:
-    """주인공 고르기 그림 (region을 주면 오박사 연구소 설명까지). 6·8·9세대 주인공 그림은 처음 한 번 받아 온다"""
+async def heroes_file(hero: str) -> discord.File | None:
+    """주인공 고르기 그림 (6·8·9세대 주인공 그림은 처음 한 번 받아 온다)"""
     try:
         await sprites.ensure(trainers=[k for k, *_ in H.HEROES], timeout=1.0)
-        png = await asyncio.to_thread(scene.heroes, hero, sprites.get_trainer, region)
+        png = await asyncio.to_thread(scene.heroes, hero, sprites.get_trainer)
         return discord.File(io.BytesIO(png), filename=ui.HEROES_FILE)
     except Exception as ex:
         log.warning("주인공 그림 실패: %s", short_error(ex))
         return None
+
+
+async def start_files(hero: str, region: str) -> list[discord.File]:
+    """모험 시작 화면 그림 두 장 (오박사 설명, 주인공 고르기). 하나라도 실패하면 글 화면으로"""
+    try:
+        intro = discord.File(io.BytesIO(await asyncio.to_thread(scene.intro, region)), filename=ui.INTRO_FILE)
+    except Exception as ex:
+        log.warning("시작 화면 그림 실패: %s", short_error(ex))
+        return []
+    roster = await heroes_file(hero)
+    return [intro, roster] if roster else []
 
 
 async def start_game(interaction: discord.Interaction, mode: str):
@@ -298,10 +309,10 @@ async def start_game(interaction: discord.Interaction, mode: str):
                    content="모험을 이어서 해요!" if mode == "adventure" else
                    "진행 중인 게임이 있어요! 이어서 하거나, 🏳️ 포기 후 새로 시작할 수 있어요.")
         return
-    file = None
+    files = []
     if mode == "adventure":
-        file = await heroes_file(H.DEFAULT, "관동")
-        content, embeds, view = ui.adventure_start_screen(slot, image=file is not None)
+        files = await start_files(H.DEFAULT, "관동")
+        content, embeds, view = ui.adventure_start_screen(slot, image=bool(files))
         sprites.prefetch(backs=ui.REGIONS["관동"] + [4, 7, 1])
         title = f"{name}의 관동 모험"
     else:
@@ -318,7 +329,7 @@ async def start_game(interaction: discord.Interaction, mode: str):
         content, embeds, view = ui.mode_start_screen(slot, mode, period, starters)
         sprites.prefetch(backs=starters)
         title = f"{name}의 {ui.MODE_KO[mode].split(' ', 1)[1]} {period}"
-    await post_in_thread(interaction, title, content or None, embeds, view, file)
+    await post_in_thread(interaction, title, content or None, embeds, view, files)
 
 
 # ---------- 그림 도감 (pd:<유저>:<세대|sel>:<쪽>) ----------
@@ -467,11 +478,11 @@ async def handle_component(interaction: discord.Interaction, custom_id: str):
                 region, hero = (value, arg) if act == "region" else (arg, value)
                 hero = H.valid(hero)
                 region = region if region in ui.REGIONS else "관동"
-                file = await heroes_file(hero, region)
-                content, embeds, view = ui.adventure_start_screen(slot, region, hero, image=file is not None)
+                files = await start_files(hero, region)
+                content, embeds, view = ui.adventure_start_screen(slot, region, hero, image=bool(files))
                 sprites.prefetch(backs=ui.REGIONS.get(region, []))
                 await interaction.response.edit_message(content=content or None, embeds=embeds, view=view,
-                                                        attachments=[file] if file else [])
+                                                        attachments=files)
                 return
             if act == "new":   # 데일리·챌린지가 끝난 화면의 버튼
                 await interaction.response.edit_message(view=None)

@@ -82,6 +82,7 @@ REGIONS = {
 
 
 HEROES_FILE = "heroes.png"
+INTRO_FILE = "intro.png"
 
 
 def adventure_start_screen(uid, region: str = "관동", hero: str = H.DEFAULT,
@@ -105,7 +106,8 @@ def adventure_start_screen(uid, region: str = "관동", hero: str = H.DEFAULT,
     if image:   # 설명은 그림(오박사 연구소 + 주인공 고르기)에 들어 있다
         embeds[0].description = (f"주인공: **{hname}** ({hgen}세대 · {hgame}) · 스타팅 지방: **{region}**\n"
                                   "아래 메뉴에서 주인공과 지방을 고르고, 버튼으로 함께 떠날 포켓몬을 골라 주세요.")
-        embeds[0].set_image(url=f"attachment://{HEROES_FILE}")
+        embeds[0].set_image(url=f"attachment://{INTRO_FILE}")
+        embeds.append(discord.Embed(color=0x3BA55D).set_image(url=f"attachment://{HEROES_FILE}"))
     view = discord.ui.View(timeout=None)
     view.add_item(discord.ui.Select(
         custom_id=cid(uid, 0, "hero", region), placeholder="주인공 고르기", row=1,
