@@ -232,6 +232,7 @@ def main():
     fr, em = Path(sys.argv[1]), Path(sys.argv[2])
     layouts = {l["id"]: l for l in json.loads((fr / "data/layouts/layouts.json").read_text())["layouts"] if "id" in l}
     have = people(fr, em)
+    hero_walkers(fr)
     wallpaper(fr)
     places = {}
     for key, outdoor in OUTDOOR.items():
@@ -265,6 +266,71 @@ def main():
         places[key] = p
     (OUT_MAPS / "places.json").write_text(json.dumps(places, ensure_ascii=False, separators=(",", ":")))
     print("장소", len(places), "사람", len(have) + len(em_have))
+
+
+
+# ---------- 주인공 걷는 그림 (원본이 없는 주인공은 레드·리프 그림의 색을 바꿔 만든다) ----------
+def _shade(c, k):
+    return tuple(max(0, min(255, int(v * k))) for v in c)
+
+
+# 바탕 그림의 (팔레트 번호, 줄 범위) → 부위. 줄은 16x32 칸 안의 y (위에서부터)
+RED_PARTS = {"hat": ({11: "main", 12: "dark", 8: "edge"}, range(0, 19)), "brim": ({9: "light", 10: "main"}, range(0, 19)),
+             "hair": ({6: "main"}, range(19, 23)), "top": ({11: "main", 12: "dark", 9: "light", 10: "main"}, range(19, 32)),
+             "pants": ({6: "dark", 7: "main"}, range(23, 32))}
+LEAF_PARTS = {"hat": ({9: "light", 10: "main", 6: "edge"}, range(0, 20)), "ribbon": ({11: "main", 12: "dark"}, range(0, 20)),
+              "hair": ({4: "main"}, range(0, 32)), "top": ({5: "main", 6: "dark", 7: "light"}, range(20, 32)),
+              "skirt": ({12: "main", 11: "light"}, range(20, 32))}
+HERO_COLORS = {   # 주인공 → (바탕, {부위: 대표 색})
+    "ethan": ("red", {"hair": (40, 40, 48), "hat": (64, 64, 72), "brim": (240, 200, 56), "top": (208, 56, 56), "pants": (56, 56, 64)}),
+    "lucas": ("red", {"hair": (40, 40, 56), "hat": (208, 56, 64), "brim": (232, 232, 240), "top": (72, 104, 192), "pants": (64, 64, 80)}),
+    "hilbert": ("red", {"hair": (96, 56, 32), "hat": (216, 56, 56), "brim": (240, 240, 248), "top": (64, 112, 200), "pants": (48, 48, 56)}),
+    "nate": ("red", {"hair": (112, 64, 40), "hat": (224, 72, 64), "brim": (40, 40, 48), "top": (72, 136, 216), "pants": (208, 208, 216)}),
+    "calem": ("red", {"hair": (56, 40, 32), "hat": (200, 48, 56), "brim": (56, 56, 64), "top": (48, 64, 120), "pants": (96, 104, 120)}),
+    "elio": ("red", {"hair": (32, 32, 40), "hat": (56, 56, 64), "brim": (232, 200, 64), "top": (96, 160, 224), "pants": (48, 48, 56)}),
+    "victor": ("red", {"hair": (72, 48, 32), "hat": (96, 96, 104), "brim": (200, 200, 208), "top": (152, 152, 160), "pants": (64, 72, 96)}),
+    "florian": ("red", {"hair": (120, 72, 40), "hat": (120, 72, 40), "brim": (120, 72, 40), "top": (240, 140, 48), "pants": (224, 200, 136)}),
+    "lyra": ("leaf", {"hat": (240, 240, 248), "ribbon": (216, 56, 56), "hair": (136, 88, 48), "top": (216, 72, 72),
+                      "skirt": (64, 104, 200)}),
+    "dawn": ("leaf", {"hat": (240, 240, 248), "ribbon": (248, 120, 168), "hair": (40, 48, 96), "top": (56, 56, 64),
+                      "skirt": (240, 104, 160)}),
+    "hilda": ("leaf", {"hat": (240, 240, 248), "ribbon": (232, 104, 152), "hair": (120, 72, 40), "top": (232, 232, 240),
+                       "skirt": (72, 104, 176)}),
+    "rosa": ("leaf", {"hat": (240, 120, 168), "ribbon": (240, 240, 248), "hair": (136, 88, 48), "top": (72, 120, 200),
+                      "skirt": (248, 208, 64)}),
+    "serena": ("leaf", {"hat": (232, 120, 152), "ribbon": (56, 56, 64), "hair": (232, 200, 96), "top": (56, 56, 64),
+                        "skirt": (208, 56, 64)}),
+    "selene": ("leaf", {"hat": (216, 56, 56), "ribbon": (216, 56, 56), "hair": (48, 40, 48), "top": (240, 240, 232),
+                        "skirt": (96, 176, 96)}),
+    "gloria": ("leaf", {"hat": (96, 160, 96), "ribbon": (96, 160, 96), "hair": (128, 80, 48), "top": (176, 176, 184),
+                        "skirt": (232, 120, 152)}),
+    "juliana": ("leaf", {"hat": (120, 72, 40), "ribbon": (120, 72, 40), "hair": (120, 72, 40), "top": (152, 96, 200),
+                         "skirt": (96, 80, 120)}),
+}
+TONE = {"main": 1.0, "dark": 0.72, "light": 1.18, "edge": 0.5}
+
+
+def hero_walkers(fr: Path):
+    """원본 걷는 그림이 없는 주인공 16명 → assets/people/hero_<키>.png (레드·리프 그림의 색만 바꿈)"""
+    bases = {"red": ("red_normal", RED_PARTS), "leaf": ("green_normal", LEAF_PARTS)}
+    for key, (base, colors) in HERO_COLORS.items():
+        name, parts = bases[base]
+        src = Image.open(fr / "graphics/object_events/pics/people" / f"{name}.png")
+        idx, pal = src.load(), src.getpalette()
+        out = strip_of(fr / "graphics/object_events/pics/people" / f"{name}.png")
+        op = out.load()
+        fw = src.width // 9
+        for slot, frame in enumerate((0, 1, 2)):   # [아래, 위, 왼쪽]
+            for y in range(src.height):
+                for x in range(fw):
+                    i = idx[frame * fw + x, y]
+                    if i == 0:
+                        continue
+                    for part, (index_tone, rows) in parts.items():
+                        if part in colors and i in index_tone and y in rows:
+                            op[slot * fw + x, y] = _shade(colors[part], TONE[index_tone[i]]) + (255,)
+                            break
+        out.save(OUT_PEOPLE / f"hero_{key}.png")
 
 
 if __name__ == "__main__":

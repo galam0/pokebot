@@ -1058,8 +1058,13 @@ def _walker(name: str, face: str) -> Image.Image | None:
 
 
 def _overworld(hero: str) -> str:
-    """주인공의 필드 그림 (파이어레드·에메랄드에 있는 주인공 말고는 남녀에 맞춰 레드·리프로)"""
-    return OVERWORLD.get(hero) or ("green_normal" if hero in FEMALE else "red_normal")
+    """주인공의 필드 그림: 파이어레드·에메랄드에 있는 넷은 원본, 나머지는 레드·리프 그림의 색을 바꾼 것
+    (tools/build_places.py). 그것도 없으면 남녀에 맞춰 레드·리프"""
+    if hero in OVERWORLD:
+        return OVERWORLD[hero]
+    if _asset(f"people/hero_{hero}.png") is not None:
+        return f"hero_{hero}"
+    return "green_normal" if hero in FEMALE else "red_normal"
 
 
 def _dialog(d, lines: list[tuple[str, tuple]]):
