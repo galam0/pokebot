@@ -1623,7 +1623,10 @@ def dex_page(gen: int, page: int, caught: dict[int, int], get_sprite: SpriteGett
         d.rounded_rectangle(box, radius=3, fill=(248, 252, 240) if own else (184, 200, 184),
                             outline=(120, 144, 120))
         num = f"{sid:03d}" if sid < 1000 else str(sid)
-        _text(d, (cx0 + 3, cy0 + 1), num, fill=(72, 96, 72) if own else (112, 128, 112))
+        if own:   # 번호는 아이콘 위에 (글자는 그림을 다 붙인 뒤에 쓰므로 가려지지 않는다)
+            d.texts.append(((cx0 + 3, cy0), num, TINY, (72, 96, 72), (248, 252, 240)))
+        else:
+            _text(d, (cx0 + 3, cy0 + 1), num, fill=(112, 128, 112))
         if own:
             sp = _icon(get_icon, get_sprite, sid)   # 작은 칸에는 메뉴 아이콘 (2배로 선명하게)
             _put(im, d, sp, cx0 + cw // 2, cy0 + ch - 11, cw - 4, ch - 12)

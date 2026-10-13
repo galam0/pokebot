@@ -57,7 +57,20 @@ def artwork(sid: int) -> str:
     return f"{SPRITE_BASE}/other/official-artwork/{sid}.png"
 
 
+_SPRITE_NAMES: dict | None = None
+
+
 def sprite(sid: int) -> str:
+    """작은 그림 주소 (임베드 아이콘용). 다른 그림과 같은 블랙·화이트 스타일 (smogon/sprites)"""
+    global _SPRITE_NAMES
+    if _SPRITE_NAMES is None:
+        f = Path(__file__).resolve().parent / "sprite_names.json"
+        _SPRITE_NAMES = json.loads(f.read_text()) if f.exists() else {}
+    front = (_SPRITE_NAMES.get(str(sid)) or [None])[0]
+    if front and not front.startswith("sd:"):
+        return f"https://raw.githubusercontent.com/smogon/sprites/master/src/sprites/gen5/{front}"
+    if front:
+        return f"https://play.pokemonshowdown.com/sprites/gen5/{front[3:]}.png"
     return f"{SPRITE_BASE}/{sid}.png"
 
 
