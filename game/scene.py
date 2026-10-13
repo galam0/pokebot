@@ -30,6 +30,7 @@ FONT = ImageFont.truetype(str(_FONT_DIR / "NanumGothicBold.ttf"), 27)
 BOLD = ImageFont.truetype(str(_FONT_DIR / "NanumGothicExtraBold.ttf"), 29)
 SMALL = ImageFont.truetype(str(_FONT_DIR / "NanumGothicBold.ttf"), 22)
 TITLE = ImageFont.truetype(str(_FONT_DIR / "NanumGothicExtraBold.ttf"), 52)
+TINY = ImageFont.truetype(str(_FONT_DIR / "NanumGothicBold.ttf"), 18)
 
 SpriteGetter = Callable[[int, bool], Image.Image | None]   # (종 번호, 뒷모습?) -> 이미지
 TrainerGetter = Callable[[str], Image.Image | None]        # 주인공 키 -> 이미지
@@ -193,6 +194,39 @@ def _tw(s: str, font=FONT) -> int:
     if _is_pixel(s):
         return _pixel_width(s, False) + 1
     return int(font.getlength(s) / SCALE + 0.99)
+
+
+def _shrink(s: str, max_w: int, fonts=None) -> tuple[str, ImageFont.FreeTypeFont]:
+    """칸 폭에 맞게: 글꼴을 차례로 줄여 보고, 가장 작은 글꼴로도 넘치면 끝을 …로"""
+    fonts = fonts or (FONT, SMALL, TINY)
+    for f in fonts:
+        if _tw(s, f) <= max_w:
+            return s, f
+    f = fonts[-1]
+    while _tw(s + "…", f) > max_w and len(s) > 1:
+        s = s[:-1]
+    return s + "…", f
+
+
+def _wrap_tw(s: str, max_w: int, font=None) -> list[str]:
+    """작은 캔버스 폭(max_w)에 맞춰 줄바꿈 (띄어쓰기 단위, 긴 낱말은 글자 단위)"""
+    font = font or FONT
+    lines, cur = [], ""
+    for word in s.split(" "):
+        t = f"{cur} {word}" if cur else word
+        if _tw(t, font) <= max_w:
+            cur = t
+            continue
+        if cur:
+            lines.append(cur)
+        cur = word
+        while _tw(cur, font) > max_w and len(cur) > 1:   # 띄어쓰기 없이 긴 낱말
+            k = len(cur)
+            while k > 1 and _tw(cur[:k], font) > max_w:
+                k -= 1
+            lines.append(cur[:k])
+            cur = cur[k:]
+    return lines + ([cur] if cur else [])
 
 
 def _bar(d, x, y, w, h, ratio, fg, bg=(64, 64, 72), edge=INK):
@@ -367,14 +401,15 @@ def _battle_layers(run: dict, message: list[str] | None):
     # 상대 정보창
     if e:
         _panel(d, (6, 8, 146, 48 if e.get("bars", 0) > 1 else 44))
-        name = D.name(e["sid"])
-        _text(d, (12, 12), name, font=BOLD)
-        x = 12 + _tw(name, BOLD) + 4
+        lv = f"Lv.{e['lv']}"
+        tags = (_tw("BOSS", BOLD) + 4 if e.get("boss") else 0) + (_tw(E.STATUS_KO[e["status"]]) + 10 if e.get("status") else 0)
+        name, nf = _shrink(D.name(e["sid"]), 140 - _tw(lv) - 4 - 12 - tags, (BOLD, FONT, SMALL, TINY))
+        _text(d, (12, 12 + (BOLD.size - nf.size) // 6), name, font=nf)
+        x = 12 + _tw(name, nf) + 4
         if e.get("boss"):
             _text(d, (x, 12), "BOSS", font=BOLD, fill=(200, 48, 48))
             x += _tw("BOSS", BOLD) + 4
         _status_tag(d, x, 12, e.get("status"))
-        lv = f"Lv.{e['lv']}"
         _text(d, (140 - _tw(lv), 12), lv)
         r = e["hp"] / E.max_hp(e)
         _hp_gauge(d, 12, 28, 128, r)
@@ -392,10 +427,11 @@ def _battle_layers(run: dict, message: list[str] | None):
     # 내 정보창 (+ 파티 볼)
     _panel(d, (172, 98, 314, 142))
     _party_balls(d, 258, 89, run)
-    name = D.name(p["sid"])
-    _text(d, (178, 102), name, font=BOLD)
-    _status_tag(d, 178 + _tw(name, BOLD) + 4, 102, p.get("status"))
     lv = f"Lv.{p['lv']}"
+    tags = _tw(E.STATUS_KO[p["status"]]) + 10 if p.get("status") else 0
+    name, nf = _shrink(D.name(p["sid"]), 308 - _tw(lv) - 4 - 178 - tags, (BOLD, FONT, SMALL, TINY))
+    _text(d, (178, 102 + (BOLD.size - nf.size) // 6), name, font=nf)
+    _status_tag(d, 178 + _tw(name, nf) + 4, 102, p.get("status"))
     _text(d, (308 - _tw(lv), 102), lv)
     mh = E.max_hp(p)
     r = p["hp"] / mh
@@ -592,10 +628,8 @@ def _message_box(d, lines: list[str]):
     d.rectangle((0, 148, W, H), fill=MSG_EDGE)
     d.rounded_rectangle((3, 151, W - 4, H - 4), radius=3, fill=MSG_BG, outline=(24, 32, 56))
     y = 155
-    for s in lines[-3:]:
-        s = josa(s)
-        while _tw(s) > W - 22:
-            s = s[:-1]
+    rows = [r for s in lines[-3:] for r in _wrap_tw(josa(s), W - 22)]
+    for s in rows[-3:]:
         _text(d, (11, y), s, fill=(248, 248, 248), shadow=(16, 24, 40))
         y += 12
 
@@ -662,7 +696,9 @@ def summary(run: dict, get_sprite: SpriteGetter | None = None, index: int | None
         x0, y0 = 6 + (i % 2) * 155, 137 + (i // 2) * 27
         col = TYPE_RGB[m["t"]]
         _panel(d, (x0, y0, x0 + 152, y0 + 26), fill=tuple(min(255, c // 4 + 190) for c in col), edge=tuple(max(0, c - 60) for c in col))
-        _text(d, (x0 + 5, y0 + 2), m["n"], font=BOLD)
+        pp_w = _tw(f"PP {p['pp'][i]}/{E.max_pp(p, i)}") + 6
+        mname, mf = _shrink(m["n"], 146 - pp_w, (BOLD, FONT, SMALL, TINY))
+        _text(d, (x0 + 5, y0 + 2 + (BOLD.size - mf.size) // 6), mname, font=mf)
         pp = f"PP {p['pp'][i]}/{E.max_pp(p, i)}"
         _text(d, (x0 + 148 - _tw(pp), y0 + 2), pp, fill=(200, 48, 48) if p["pp"][i] == 0 else INK)
         _type_pill(d, x0 + 5, y0 + 13, m["t"])
@@ -726,9 +762,7 @@ def _cards(im, d, entries: list[dict], y0: int = 30, y1: int = 120):
             d.ellipse((cx - 12, y0 + 20, cx + 12, y0 + 44), fill=(232, 200, 120), outline=(160, 120, 40))
             _text(d, (cx - 3, y0 + 26), "?", font=BOLD, fill=(120, 80, 24))
         name = en["n"]
-        nf = BOLD if _tw(name, BOLD) <= w - 6 else FONT   # 길면 조금 얇은 글꼴로
-        while _tw(name, nf) > w - 6 and len(name) > 2:
-            name = name[:-1]
+        name, nf = _shrink(name, w - 6, (BOLD, FONT, SMALL, TINY))   # 길면 글씨를 줄여서
         _text(d, (cx - _tw(name, nf) // 2, y0 + 54), name, font=nf)
         text = en["d"]
         if ". " in text and _tw(text) > 2 * (w - 8):   # 카드에 안 들어가면 앞의 꾸밈말은 빼고
@@ -929,14 +963,16 @@ def _dialog(d, lines: list[tuple[str, tuple]]):
     """파이어레드풍 하얀 대화창 (3줄, 많으면 두 칸으로)"""
     d.rounded_rectangle((2, 146, W - 3, H - 3), radius=4, fill=DIALOG_BG, outline=DIALOG_EDGE, width=1)
     d.rounded_rectangle((4, 148, W - 5, H - 5), radius=3, outline=DIALOG_INNER, width=1)
-    cols = 1 if len(lines) <= 3 else 2
-    for i, (s, col) in enumerate(lines[:3 * cols]):
+    if len(lines) <= 3:   # 한 칸: 길면 다음 줄로
+        rows = [(r, col) for s, col in lines for r in _wrap_tw(josa(s), W - 28)]
+        if len(rows) <= 3:
+            for r, (s, col) in enumerate(rows):
+                _text(d, (12, 152 + r * 12), s, fill=col)
+            return
+    for i, (s, col) in enumerate(lines[:6]):   # 두 칸: 칸마다 글씨를 줄여서 맞춘다
         c, r = divmod(i, 3)
-        x = 12 + c * (W // 2 - 4)
-        s = josa(s)
-        while _tw(s) > (W - 28) // cols and len(s) > 2:
-            s = s[:-1]
-        _text(d, (x, 152 + r * 12), s, fill=col)
+        s, f = _shrink(josa(s), W // 2 - 18)
+        _text(d, (12 + c * (W // 2 - 4), 152 + r * 12), s, font=f, fill=col)
 
 
 def map_scene(run: dict, kind: str = "field", lines: list[tuple[str, tuple]] | None = None) -> bytes | None:
@@ -968,10 +1004,11 @@ def map_scene(run: dict, kind: str = "field", lines: list[tuple[str, tuple]] | N
     L = A.loc(run)
     title = {"center": f"{L['n']} 포켓몬센터", "mart": f"{L['n']} " + ("백화점" if L.get("dept") else "프렌들리숍"),
              "gym": f"{L['n']} 체육관", "home": "우리 집"}.get(kind, L["n"])
-    tw = _tw(title, BOLD)
+    title, tf = _shrink(title, W - 100, (BOLD, FONT, SMALL))
+    tw = _tw(title, tf)
     d.rounded_rectangle((4, 4, 16 + tw, 22), radius=3, fill=(248, 248, 240), outline=(72, 88, 120), width=1)
     d.rectangle((6, 6, 8, 20), fill=(232, 88, 72))
-    _text(d, (11, 6), title, font=BOLD)
+    _text(d, (11, 6 + (BOLD.size - tf.size) // 6), title, font=tf)
     # 오른쪽 위: 돈 · 배지
     region = A.region_of(run["loc"])
     info = f"₽{run.get('money', 0):,}"
@@ -1213,10 +1250,8 @@ def menu(info: dict, get_sprite: SpriteGetter | None = None) -> bytes:
         for i, t in enumerate(lines):
             _text(d, (14, 58 + i * 13), t, font=SMALL, fill=INK)
     else:
-        name = info.get("name", "트레이너")
-        while _tw(name, BOLD) > 100 and len(name) > 2:
-            name = name[:-1]
-        _text(d, (14, 40), name, font=BOLD, fill=(255, 255, 255), shadow=(150, 40, 32))
+        name, nf = _shrink(info.get("name", "트레이너"), 100, (BOLD, FONT, SMALL, TINY))
+        _text(d, (14, 40 + (BOLD.size - nf.size) // 6), name, font=nf, fill=(255, 255, 255), shadow=(150, 40, 32))
         dex = f"도감 {info.get('dex', 0)}"
         _text(d, (160 - _tw(dex, SMALL), 41), dex, font=SMALL, fill=(255, 240, 220), shadow=(150, 40, 32))
         rows = [("관동", K.GYM_ORDER, BADGE_RGB, "hof"), ("성도", J.GYM_ORDER, J.BADGE_RGB, "hof2"),
@@ -1267,9 +1302,8 @@ def menu(info: dict, get_sprite: SpriteGetter | None = None) -> bytes:
         d.rounded_rectangle((x0, 146, x0 + tw, 186), radius=4, fill=col, outline=dark, width=2)
         d.rectangle((x0 + 3, 149, x0 + tw - 3, 151), fill=tuple(min(255, c + 50) for c in col))
         _text(d, (x0 + 7, 152), title, font=BOLD, fill=(255, 255, 255), shadow=dark)
-        while _tw(desc, SMALL) > tw - 12 and len(desc) > 2:
-            desc = desc[:-1]
-        _text(d, (x0 + 7, 170), desc, font=SMALL, fill=(255, 255, 240), shadow=dark)
+        desc, df = _shrink(desc, tw - 12, (SMALL, TINY))
+        _text(d, (x0 + 7, 170), desc, font=df, fill=(255, 255, 240), shadow=dark)
     return _finish(im, d)
 
 
@@ -1431,10 +1465,10 @@ def starters(region: str, sids: list[int], get_sprite: SpriteGetter | None = Non
         for k, (label, v) in enumerate(zip(STAT_KO, st)):
             y = 130 + k * 9
             _text(d, (x0 + 4, y - 2), label, font=SMALL, fill=(88, 80, 72))
-            bx0, bx1 = x0 + 30, x1 - 18
+            bx0, bx1 = x0 + 30, x1 - 22   # 숫자는 카드 오른쪽 끝에 맞춘다 (세 자리도 들어가게)
             d.rectangle((bx0, y + 1, bx1, y + 5), fill=(216, 212, 200))
             d.rectangle((bx0, y + 1, bx0 + max(1, round((bx1 - bx0) * min(1, v / 150))), y + 5), fill=STAT_RGB[k])
-            _text(d, (bx1 + 3, y - 1), str(v), fill=INK)
+            _text(d, (x1 - 3 - _tw(str(v)), y - 1), str(v), fill=INK)
     return _finish(im, d)
 
 
@@ -1490,10 +1524,8 @@ def dex_page(gen: int, page: int, caught: dict[int, int], get_sprite: SpriteGett
         if own:
             sp = _icon(get_icon, get_sprite, sid)   # 작은 칸에는 메뉴 아이콘 (2배로 선명하게)
             _put(im, d, sp, cx0 + cw // 2, cy0 + ch - 11, cw - 4, ch - 12)
-            name = D.name(sid)
-            while _tw(name, SMALL) > cw - 4 and len(name) > 1:
-                name = name[:-1]
-            _text(d, (cx0 + cw // 2 - _tw(name, SMALL) // 2, cy0 + ch - 12), name, font=SMALL, fill=INK)
+            name, nf = _shrink(D.name(sid), cw - 4, (SMALL, TINY))
+            _text(d, (cx0 + cw // 2 - _tw(name, nf) // 2, cy0 + ch - 12), name, font=nf, fill=INK)
             if caught[sid] > 1:
                 c = f"x{caught[sid]}"
                 _text(d, (cx0 + cw - 3 - _tw(c), cy0 + 1), c, fill=(200, 96, 48))
