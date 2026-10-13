@@ -706,6 +706,7 @@ async def main():
                 if e.status != 429:
                     raise
                 log.warning("디스코드 로그인이 잠시 막혔어요 (429). %d초 뒤에 다시 시도해요.", delay)
+                await bot.http.close()
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, 600)
         await bot.connect()
