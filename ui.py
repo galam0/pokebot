@@ -73,25 +73,40 @@ def mon_head(mon: dict) -> str:
 
 
 # ---------- 스타팅 선택 ----------
-def adventure_start_screen(uid) -> tuple[str, list[discord.Embed], discord.ui.View]:
-    """모험 시작: 오박사 연구소에서 관동 스타팅 3마리 중 하나"""
+REGIONS = {
+    "관동": [1, 4, 7], "성도": [152, 155, 158], "호연": [252, 255, 258],
+    "신오": [387, 390, 393], "하나": [495, 498, 501], "칼로스": [650, 653, 656],
+    "알로라": [722, 725, 728], "가라르": [810, 813, 816], "팔데아": [906, 909, 912],
+}
+
+
+def adventure_start_screen(uid, region: str = "관동") -> tuple[str, list[discord.Embed], discord.ui.View]:
+    """모험 시작: 오박사 연구소. 1~9세대 스타팅 27마리 중 하나 (지방을 고르면 그 지방 스타팅 3마리)"""
+    region = region if region in REGIONS else "관동"
     embeds = [discord.Embed(
         title="🧪 오박사 연구소",
-        description=("오박사: \"오오, 왔구나! 이 세 마리 중에서 함께 떠날 포켓몬을 골라 보거라.\"\n\n"
-                     "• 태초마을에서 출발해 도로와 동굴을 지나며 포켓몬을 잡고 키워요.\n"
-                     "• 체육관 8곳에서 배지를 모으면 석영고원에서 사천왕과 챔피언에게 도전할 수 있어요.\n"
+        description=("오박사: \"오오, 왔구나! 함께 떠날 포켓몬을 골라 보거라. 먼 지방에서 온 포켓몬도 있단다.\"\n\n"
+                     "• 태초마을에서 출발해 관동의 도로와 동굴을 지나며 포켓몬을 잡고 키워요.\n"
+                     "• 체육관 8곳의 배지를 모아 석영고원에서 사천왕과 챔피언에게 도전해요.\n"
+                     "• 관동 챔피언이 되면 파티와 PC를 그대로 데리고 **성도 지방**으로 떠날 수 있어요.\n"
                      "• 배지가 늘수록 더 높은 레벨까지 말을 들어요. 지면 마지막 포켓몬센터로 돌아가요.\n"
-                     "• 진행은 계속 저장되고, `/초기화`로 처음부터 다시 할 수 있어요."),
+                     "• 진행은 계속 저장되고, `/초기화`로 처음부터 다시 할 수 있어요.\n\n"
+                     f"아래 메뉴에서 지방을 바꾸면 다른 세대 스타팅도 고를 수 있어요. 지금: **{region}**"),
         color=0x3BA55D)]
     view = discord.ui.View(timeout=None)
-    for sid in A.STARTERS:
+    view.add_item(discord.ui.Select(
+        custom_id=cid(uid, 0, "region"), placeholder="다른 지방 스타팅 보기", row=1,
+        options=[discord.SelectOption(label=f"{i + 1}세대 · {r}", value=r, default=r == region,
+                                      description=" / ".join(D.name(x) for x in ids))
+                 for i, (r, ids) in enumerate(REGIONS.items())]))
+    for sid in REGIONS[region]:
         st = D.SPECIES[sid]["s"]
         e = discord.Embed(title=D.name(sid), color=TYPE_COLOR.get(D.types(sid)[0], 0x5865F2),
                           description=(f"{D.type_text(sid)} 타입 · 종족값 합계 {sum(st)}\n"
                                        f"HP {st[0]} · 공격 {st[1]} · 방어 {st[2]} · 특공 {st[3]} · 특방 {st[4]} · 스피드 {st[5]}"))
         e.set_thumbnail(url=D.artwork(sid))
         embeds.append(e)
-        view.add_item(discord.ui.Button(label=D.name(sid), style=discord.ButtonStyle.primary,
+        view.add_item(discord.ui.Button(label=D.name(sid), style=discord.ButtonStyle.primary, row=0,
                                         custom_id=cid(uid, 0, "starter", sid)))
     return "", embeds, _frozen(view)
 
@@ -165,7 +180,10 @@ def _base_embed(trainer: str, run: dict, title: str | None = None, color: int | 
     desc = josa("\n".join(x for x in log[-16:] if x)) or "​"
     embed = discord.Embed(title=title, description=desc[:4000], color=color)
     p = E.lead(run)
-    extra = f" · 배지 {len(run['badges'])}개" if mode == "adventure" else ""
+    extra = ""
+    if mode == "adventure":
+        region = A.region_of(run["loc"])
+        extra = f" · {A.REGIONS[region]['n']} 배지 {len(A.region_badges(run, region))}개"
     embed.set_author(name=f"{trainer} 트레이너 · ₽{run.get('money', 0):,}{extra}", icon_url=D.sprite(p["sid"]))
     if run.get("rule"):
         embed.set_footer(text="이번 주 규칙: " + E.RULES[run["rule"]]
@@ -483,18 +501,24 @@ def field_screen(uid: int, trainer: str, run: dict, image: bool = True) -> Scree
              style=B.primary, emoji="⚔️", row=0, disabled=not left)
     gkey, ok, why = A.gym_state(run)
     if gkey:
-        g = K.GYMS[gkey]
+        g = A.GYMS[gkey]
         label = (f"체육관 도전 · 관장 {g['leader']}" if ok else
                  (f"{g['badge']} 획득!" if gkey in run["badges"] else f"체육관 ({why})"))
         _btn(view, label, uid, ver, "gym", style=B.danger, emoji="🏟️", row=0, disabled=not ok)
     if L.get("league"):
-        _btn(view, "포켓몬 리그 도전" if A.league_ready(run) else "포켓몬 리그 (배지 8개 필요)", uid, ver, "league",
-             style=B.danger, emoji="🏆", row=0, disabled=not A.league_ready(run))
+        league, ok, why = A.league_info(run)
+        name = f"{A.REGIONS[league]['n']} 리그"
+        _btn(view, (f"{name} 도전" if ok else f"{name} ({why})"), uid, ver, "league",
+             style=B.danger, emoji="🏆", row=0, disabled=not ok)
     lg = A.legend_available(run)
     if lg:
         _btn(view, "기운이 느껴지는 곳으로", uid, ver, "legend", style=B.danger, emoji="✨", row=0)
     if A.gift_available(run):
         _btn(view, "포켓몬 받기", uid, ver, "gift", style=B.success, emoji="🎁", row=0)
+    gc = A.gift_choices(run)
+    if gc:
+        for sid in gc[0]:
+            _btn(view, f"공박사: {D.name(sid)} 받기", uid, ver, "gift2", sid, style=B.success, emoji="🎁", row=4)
 
     if A.has_center(run):
         _btn(view, "집에서 쉬기" if L.get("home") else "포켓몬센터", uid, ver, "heal", emoji="🏥", row=1)
@@ -515,10 +539,12 @@ def field_screen(uid: int, trainer: str, run: dict, image: bool = True) -> Scree
                                                      for m in run["party"]), inline=False)
     places = []
     for k, ok, why in A.neighbors(run):
-        places.append(f"{K.LOCATIONS[k]['n']}" + ("" if ok else f" 🔒 {why}"))
+        places.append(f"{A.LOC[k]['n']}" + ("" if ok else f" 🔒 {why}"))
     embed.add_field(name="갈 수 있는 곳", value=" · ".join(places), inline=False)
-    cap = "없음 (챔피언)" if run.get("hof") else f"Lv.{A.level_cap(run)}"
-    embed.set_footer(text=f"배지 {len(run['badges'])}/8 · 레벨 제한 {cap} · 박스 {len(run['box'])}마리")
+    cap = "없음" if A.level_cap(run) >= E.MAX_LEVEL else f"Lv.{A.level_cap(run)}"
+    region = A.region_of(run["loc"])
+    embed.set_footer(text=f"{A.REGIONS[region]['n']} 배지 {len(A.region_badges(run, region))}/8 · 레벨 제한 {cap} · "
+                          f"박스 {len(run['box'])}마리")
     return Screen(embed, _frozen(view), "field")
 
 
@@ -530,7 +556,7 @@ def move_screen(uid: int, trainer: str, run: dict, image: bool = True) -> Screen
         embed.set_image(url=f"attachment://{SCENE_FILE}")
     view = discord.ui.View(timeout=None)
     for n, (k, ok, why) in enumerate(A.neighbors(run)):
-        L = K.LOCATIONS[k]
+        L = A.LOC[k]
         icon = {"town": "🏘️", "route": "🌿", "cave": "⛰️", "building": "🏢", "water": "🌊"}[L["kind"]]
         _btn(view, L["n"] + ("" if ok else f" ({why})"), uid, ver, "goto", k, style=B.primary if ok else B.secondary,
              emoji=icon, row=n // 3, disabled=not ok)
@@ -709,8 +735,8 @@ def menu_view(uid: int) -> discord.ui.View:
 
 
 def menu_embed(public: bool = False) -> discord.Embed:
-    e = discord.Embed(title="🎮 포켓몬 관동 모험", color=0x5865F2, description=(
-        "태초마을에서 출발해 체육관 배지 8개를 모으고 포켓몬 리그 챔피언에 도전하는 게임이에요.\n\n"
+    e = discord.Embed(title="🎮 포켓몬 관동·성도 모험", color=0x5865F2, description=(
+        "태초마을에서 출발해 관동 배지 8개를 모아 챔피언이 되고, 같은 파티로 성도 지방까지 도전하는 게임이에요.\n\n"
         "**모험** 오박사에게 포켓몬을 받아 시작하거나, 하던 모험을 이어서 해요 (진행은 계속 저장돼요)\n"
         "**데일리** 오늘 모두 같은 조건으로 하루 한 번 도전하는 웨이브 게임\n"
         "**주간 챌린지** 이번 주 특별 규칙으로 도전하는 웨이브 게임\n"
@@ -726,8 +752,12 @@ def help_embed() -> discord.Embed:
                 "🎒 가방(볼·회복약), 🔄 교체는 턴을 써요. 기술마다 PP가 있어요.", inline=False)
     e.add_field(name="모험", value="🗺️ 이동하기로 마을·도로·동굴을 오가요. 🌿 풀숲 탐색으로 야생 포켓몬을 만나거나 아이템을 줍고, "
                 "⚔️ 트레이너와 싸우면 상금을 받아요. 잠긴 길은 배지를 모으면 열려요.", inline=False)
-    e.add_field(name="체육관·리그", value="체육관 8곳(웅·이슬·마티스·민화·독수·초련·강연·비주기)에서 배지와 기술머신을 받아요. "
+    e.add_field(name="체육관·리그", value="관동 체육관 8곳(웅~비주기)에서 배지와 기술머신을 받아요. "
                 "배지가 늘수록 더 높은 레벨까지 말을 들어요. 배지 8개면 석영고원에서 사천왕과 챔피언에게 도전해요.", inline=False)
+    e.add_field(name="성도 지방", value="관동 챔피언이 되면 석영고원 동쪽 26·27번도로로 성도에 가요. 파티·PC·가방은 그대로예요. "
+                "공박사에게 성도 스타팅을 하나 더 받고, 체육관 8곳(비상~이향)을 지나 성도 리그(목호)에 도전해요.", inline=False)
+    e.add_field(name="전설", value="관동: 썬더·프리저·파이어·잠만보, 챔피언 후 뮤츠·뮤. 성도: 라이코·앤테이·스이쿤·칠색조·루기아, "
+                "성도 챔피언 후 세레비. 모험의 전설은 잘 잡히게 해 뒀고, 쓰러뜨리거나 도망쳐도 다시 만날 수 있어요.", inline=False)
     e.add_field(name="센터·상점·PC", value="🏥 포켓몬센터에서 무료로 회복해요. 파티가 모두 쓰러지면 돈을 조금 잃고 마지막 센터로 돌아가요. "
                 "🛒 상점은 배지가 늘수록 파는 물건이 늘고, 💻 PC에 7마리째부터 잡은 포켓몬이 보관돼요.", inline=False)
     e.add_field(name="데일리·챌린지", value="웨이브를 넘어가는 짧은 게임이에요. 모두 같은 조건으로 도전해 랭킹을 겨뤄요.", inline=False)
@@ -774,7 +804,7 @@ def period_board_embed(title: str, rows: list[dict], me: int, extra: str = "") -
 def adventure_board(rows: list[tuple[int, dict, int]], me: int) -> discord.Embed:
     """모험 랭킹. rows: (유저, 모험 상태, 도감 수) — 챔피언 횟수 → 배지 → 도감 순"""
     e = discord.Embed(title="🗺️ 관동 모험 랭킹", color=0x3BA55D)
-    rows = sorted(rows, key=lambda r: (-r[1].get("hof", 0), -len(r[1]["badges"]), -r[2]))
+    rows = sorted(rows, key=lambda r: (-r[1].get("hof2", 0), -r[1].get("hof", 0), -len(r[1]["badges"]), -r[2]))
     mine = next(((i, r) for i, r in enumerate(rows) if r[0] == me), None)
     if mine:
         i, (_, run, dex) = mine

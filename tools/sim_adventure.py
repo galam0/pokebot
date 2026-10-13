@@ -13,7 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from game import adventure as A, data as D, engine as E, kanto as K  # noqa: E402
+from game import adventure as A, data as D, engine as E, johto as J, kanto as K  # noqa: E402
 import simulate as S  # noqa: E402
 
 
@@ -30,7 +30,7 @@ def path_to(run, goal_fn):
                 path.append(cur)
                 cur = prev[cur]
             return path[::-1]
-        for nb in K.LOCATIONS[cur]["links"]:
+        for nb in A.LOC[cur]["links"]:
             if nb not in prev and A.can_enter(run, nb)[0]:
                 prev[nb] = cur
                 q.append(nb)
@@ -101,19 +101,33 @@ def strength(run):
     return sum(lv) / len(lv)
 
 
+def _order(run):
+    return J.GYM_ORDER if run.get("hof") else K.GYM_ORDER
+
+
+def league_due(run):
+    return all(g in run["badges"] for g in _order(run))
+
+
 def goal(run):
-    if len(run["badges"]) >= 8:
+    if run.get("hof") and run["loc"] == "newbark" and A.gift_choices(run):
+        return "newbark"
+    if league_due(run):
         return "plateau"
-    for g in K.GYM_ORDER:
+    for g in _order(run):
         if g not in run["badges"]:
-            return next(k for k, L in K.LOCATIONS.items() if L.get("gym") == g)
+            return next(k for k, L in A.LOC.items() if L.get("gym") == g)
 
 
 def gym_ace(run):
-    if len(run["badges"]) >= 8:
-        return 60
-    g = next(g for g in K.GYM_ORDER if g not in run["badges"])
-    return max(lv for _, lv in K.GYMS[g]["team"])
+    if league_due(run):
+        return 86 if run.get("hof") else 60
+    g = next(g for g in _order(run) if g not in run["badges"])
+    return max(lv for _, lv in A.GYMS[g]["team"])
+
+
+def league_level(run):
+    return 84 if run.get("hof") else 56
 
 
 def hurt(run):
@@ -143,11 +157,13 @@ def field_action(run, rng, stats):
                     A.buy(run, it)
     if hurt(run):
         stats["retreats"] += 1
-        p = path_to(run, lambda k: K.LOCATIONS[k].get("center") or K.LOCATIONS[k].get("home"))
+        p = path_to(run, lambda k: A.LOC[k].get("center") or A.LOC[k].get("home"))
         if p:
             return A.move(run, p[0], rng)
     if A.gift_available(run):
         return A.take_gift(run, rng)
+    if A.gift_choices(run):
+        return A.take_gift_choice(run, A.gift_choices(run)[0][0], rng)
     if A.trainers_left(run) and not hurt(run):
         return A.fight_trainer(run, rng)
     if A.legend_available(run) and run["bag"].get("master-ball"):
@@ -156,16 +172,16 @@ def field_action(run, rng, stats):
     if ok and strength(run) >= min(gym_ace(run), A.level_cap(run)) - 3:
         stats["gym_tries"] += 1
         return A.challenge_gym(run, rng)
-    if A.league_ready(run) and strength(run) >= 56:
+    if A.league_ready(run) and league_due(run) and strength(run) >= league_level(run):
         stats["league_tries"] += 1
         return A.challenge_league(run, rng)
     # 레벨이 모자라면 수련
-    need_lv = min(gym_ace(run), A.level_cap(run)) - 3 if len(run['badges']) < 8 else 56
+    need_lv = min(gym_ace(run), A.level_cap(run)) - 3 if not league_due(run) else league_level(run)
     if strength(run) < need_lv:
         if L.get("wild"):
             stats["grind"] += 1
             return A.explore(run, rng)
-        p = path_to(run, lambda k: K.LOCATIONS[k].get("wild"))
+        p = path_to(run, lambda k: A.LOC[k].get("wild"))
         return A.move(run, p[0], rng)
     tgt = goal(run)
     if run["loc"] != tgt:
@@ -175,16 +191,17 @@ def field_action(run, rng, stats):
         return A.move(run, p[0], rng)
     if L.get("wild"):
         return A.explore(run, rng)
-    p = path_to(run, lambda k: K.LOCATIONS[k].get("wild"))
+    p = path_to(run, lambda k: A.LOC[k].get("wild"))
     return A.move(run, p[0], rng)
 
 
-def play(starter, rng, max_steps=40000):
+def play(starter, rng, max_steps=40000, until=1):
+    """until=1: 관동 챔피언까지, 2: 성도 챔피언까지"""
     run = A.new_adventure(starter, rng, "sim")
     stats = {"steps": 0, "battles": 0, "blackouts": 0, "retreats": 0, "grind": 0, "gym_tries": 0, "league_tries": 0,
              "badge_steps": []}
     badges = 0
-    while stats["steps"] < max_steps and not run.get("hof"):
+    while stats["steps"] < max_steps and not (run.get("hof2") if until == 2 else run.get("hof")):
         stats["steps"] += 1
         ph = run["phase"]
         if ph == "battle":
@@ -204,6 +221,7 @@ def play(starter, rng, max_steps=40000):
             badges = len(run["badges"])
             stats["badge_steps"].append((stats["steps"], round(strength(run))))
     stats["hof"] = run.get("hof", 0)
+    stats["hof2"] = run.get("hof2", 0)
     stats["badges"] = len(run["badges"])
     stats["party"] = [(D.name(m["sid"]), m["lv"]) for m in run["party"]]
     stats["box"] = len(run["box"])
@@ -212,13 +230,14 @@ def play(starter, rng, max_steps=40000):
 
 if __name__ == "__main__":
     n = int(sys.argv[1]) if len(sys.argv) > 1 else 3
+    until = int(sys.argv[2]) if len(sys.argv) > 2 else 2
     res = []
     for i in range(n):
         st = (1, 4, 7)[i % 3]
-        s = play(st, random.Random(i))
+        s = play(st, random.Random(i), 90000, until)
         res.append(s)
-        print(D.name(st), "챔피언" if s["hof"] else f"배지 {s['badges']}", "| 행동", s["steps"], "| 배틀", s["battles"],
+        print(D.name(st), ("성도 챔피언" if s["hof2"] else "관동 챔피언") if s["hof"] else f"배지 {s['badges']}", "| 행동", s["steps"], "| 배틀", s["battles"],
               "| 기절", s["blackouts"], "| 체육관 도전", s["gym_tries"], "| 리그 도전", s["league_tries"],
               "| 수련", s["grind"], "| 배지별 (행동, 레벨)", s["badge_steps"])
         print("   파티", s["party"], "박스", s["box"])
-    print("챔피언", sum(1 for s in res if s["hof"]), "/", n, "| 행동 중앙값", statistics.median(s["steps"] for s in res))
+    print("관동 챔피언", sum(1 for s in res if s["hof"]), "· 성도 챔피언", sum(1 for s in res if s["hof2"]), "/", n, "| 행동 중앙값", statistics.median(s["steps"] for s in res))

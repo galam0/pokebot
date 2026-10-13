@@ -14,6 +14,7 @@ from PIL import Image, ImageDraw, ImageFont
 from . import data as D
 from . import adventure as A
 from . import engine as E
+from . import johto as J
 from . import kanto as K
 from .text import josa
 
@@ -442,7 +443,7 @@ def summary(run: dict, get_sprite: SpriteGetter | None = None, index: int | None
     _text(d, (6, 3), "포켓몬 정보", font=BOLD, fill=(255, 255, 255), shadow=tuple(max(0, c - 90) for c in head))
     dark = tuple(max(0, c - 90) for c in head)
     st = f"스타팅 {D.name(run['starter'])}"
-    wv = f"배지 {len(run['badges'])}" if run.get("mode") == "adventure" else f"WAVE {run['wave']}"
+    wv = f"배지 {len(run['badges'])}" if run.get("mode") == "adventure" else f"WAVE {run['wave']}"   # 관동+성도
     _text(d, (W - _tw(st) - 6, 3), st, fill=(255, 255, 255), shadow=dark)
     _text(d, (W - _tw(st) - 12 - _tw(wv), 3), wv, fill=(255, 255, 255), shadow=dark)
 
@@ -628,12 +629,12 @@ BADGE_RGB = [(168, 168, 176), (88, 152, 240), (240, 160, 48), (120, 200, 96), (2
              (224, 72, 48), (72, 168, 104)]
 
 
-def _badge(d, x, y, i: int, got: bool):
+def _badge(d, x, y, i: int, got: bool, palette=None):
     """배지 한 개 (13x13). 없으면 빈 자리"""
     if not got:
         d.ellipse((x + 1, y + 1, x + 11, y + 11), outline=(150, 150, 160))
         return
-    col = BADGE_RGB[i]
+    col = (palette or BADGE_RGB)[i]
     dark = tuple(max(0, c - 90) for c in col)
     light = tuple(min(255, c + 80) for c in col)
     cx, cy = x + 6, y + 6
@@ -659,9 +660,12 @@ def _badge(d, x, y, i: int, got: bool):
 
 
 def _badge_case(d, x, y, run: dict):
+    """지금 있는 지방의 배지 8개"""
+    johto = A.region_of(run["loc"]) == "johto"
+    order, palette = (J.GYM_ORDER, J.BADGE_RGB) if johto else (K.GYM_ORDER, BADGE_RGB)
     _panel(d, (x, y, x + 8 * 16 + 6, y + 18), fill=(56, 48, 72), edge=(24, 20, 32))
-    for i, g in enumerate(K.GYM_ORDER):
-        _badge(d, x + 4 + i * 16, y + 3, i, g in run["badges"])
+    for i, g in enumerate(order):
+        _badge(d, x + 4 + i * 16, y + 3, i, g in run["badges"], palette)
 
 
 def _facility_lines(run: dict) -> list[tuple[str, tuple]]:
@@ -678,11 +682,12 @@ def _facility_lines(run: dict) -> list[tuple[str, tuple]]:
         out.append(("프렌들리숍" + (" · 백화점" if L.get("dept") else ""), (56, 112, 208)))
     gkey, ok, _ = A.gym_state(run)
     if gkey:
-        g = K.GYMS[gkey]
+        g = A.GYMS[gkey]
         state = "배지 획득" if gkey in run["badges"] else ("도전 가능" if ok else "문이 잠김")
         out.append((f"체육관 · 관장 {g['leader']} ({state})", (160, 96, 24)))
     if L.get("league"):
-        out.append(("포켓몬 리그" + (" · 도전 가능" if A.league_ready(run) else " · 배지 8개 필요"), (176, 136, 24)))
+        league, ok, _ = A.league_info(run)
+        out.append((f"{A.REGIONS[league]['n']} 포켓몬 리그" + (" · 도전 가능" if ok else " · 배지 8개 필요"), (176, 136, 24)))
     if L.get("trainers"):
         left = len(A.trainers_left(run))
         out.append((f"트레이너 {left}명 남음" if left else "트레이너 모두 이김", (72, 72, 88)))
@@ -692,7 +697,7 @@ def _facility_lines(run: dict) -> list[tuple[str, tuple]]:
         out.append((f"야생 포켓몬 Lv.{lo}~{hi}", (56, 136, 72)))
     if A.legend_available(run):
         out.append(("강한 기운이 느껴진다...", (136, 72, 168)))
-    if A.gift_available(run):
+    if A.gift_available(run) or A.gift_choices(run):
         out.append(("받을 수 있는 포켓몬이 있다", (200, 96, 152)))
     return out
 
@@ -710,7 +715,7 @@ def field(run: dict, get_sprite: SpriteGetter | None = None) -> bytes:
     if run["party"]:
         sp = _sprite(get_sprite, E.lead(run)["sid"], False)
         im.paste(sp, (56 - sp.width // 2, 116 - sp.height), sp)
-    cap = "없음" if run.get("hof") else f"Lv.{A.level_cap(run)}"
+    cap = "없음" if A.level_cap(run) >= E.MAX_LEVEL else f"Lv.{A.level_cap(run)}"
     tag = f"레벨 제한 {cap}" + (f" · 박스 {len(run['box'])}" if run.get("box") else "")
     _text(d, (8, 24), tag, font=SMALL, fill=(255, 255, 255), shadow=(16, 24, 40))
     # 오른쪽: 배지 + 장소 정보
@@ -731,23 +736,26 @@ KIND_RGB = {"town": (232, 80, 72), "route": (248, 224, 152), "cave": (136, 104, 
 
 
 def kanto_map(run: dict) -> bytes:
+    """지금 있는 지방(관동/성도)의 지도"""
+    region = A.region_of(run["loc"])
+    LOCS = {k: L for k, L in A.LOC.items() if L.get("region", "kanto") == region}
     im, d = _canvas((64, 128, 200))
     for y in range(0, H, 6):   # 바다 물결
         for x in range((y // 6 % 2) * 6, W, 12):
             d.line((x, y, x + 3, y), fill=(80, 144, 216))
     here = run["loc"]
-    near = K.LOCATIONS[here]["links"]
+    near = [k for k in A.LOC[here]["links"] if k in LOCS]
     seen = set()
-    for k, L in K.LOCATIONS.items():   # 길
+    for k, L in LOCS.items():   # 길
         for nb in L["links"]:
-            if (nb, k) in seen:
+            if (nb, k) in seen or nb not in LOCS:
                 continue
             seen.add((k, nb))
             ok = A.can_enter(run, k)[0] and A.can_enter(run, nb)[0]
-            a, b = L["pos"], K.LOCATIONS[nb]["pos"]
+            a, b = L["pos"], LOCS[nb]["pos"]
             d.line((*a, *b), fill=(48, 64, 96), width=5)
             d.line((*a, *b), fill=(248, 232, 176) if ok else (120, 136, 168), width=3)
-    for k, L in K.LOCATIONS.items():   # 장소
+    for k, L in LOCS.items():   # 장소
         x, y = L["pos"]
         ok = A.can_enter(run, k)[0]
         col = KIND_RGB[L["kind"]] if ok else (112, 120, 144)
@@ -763,7 +771,7 @@ def kanto_map(run: dict) -> bytes:
     # 이름표: 지금 장소와 바로 갈 수 있는 곳만 (서로 겹치지 않는 자리를 찾아서)
     taken = [(0, 0, W, 17)]
     for k in [here] + list(near):
-        L = K.LOCATIONS[k]
+        L = LOCS[k]
         x, y = L["pos"]
         ok = A.can_enter(run, k)[0]
         name = L["n"] if ok or k == here else L["n"] + " (잠김)"
@@ -784,8 +792,8 @@ def kanto_map(run: dict) -> bytes:
         fill = (255, 232, 120) if k == here else ((255, 255, 255) if ok else (184, 192, 208))
         _text(d, (best[0], best[1] - 1), name, font=SMALL, fill=fill, shadow=(16, 24, 40))
     d.rectangle((0, 0, W, 15), fill=(40, 56, 88))
-    _text(d, (6, 1), "관동 지도", font=BOLD, fill=(255, 232, 120), shadow=(16, 24, 40))
-    info = f"배지 {len(run['badges'])}/8"
+    _text(d, (6, 1), f"{A.REGIONS[region]['n']} 지도", font=BOLD, fill=(255, 232, 120), shadow=(16, 24, 40))
+    info = f"{A.REGIONS[region]['n']} 배지 {len(A.region_badges(run, region))}/8"
     _text(d, (W - _tw(info, SMALL) - 6, 1), info, font=SMALL, fill=(255, 255, 255), shadow=(16, 24, 40))
     return _finish(im, d)
 

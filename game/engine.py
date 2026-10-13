@@ -1022,6 +1022,8 @@ def catch_chance(run: dict, item: str) -> float:
     if ball >= 255:
         return 1.0
     rate = D.SPECIES[e["sid"]]["cap"] or 45
+    if (run.get("battle") or {}).get("kind") == "legend":   # 모험의 전설: 너무 안 잡히지 않게
+        rate = max(rate, 45)
     if e.get("boss"):
         rate /= 3
     mh = max_hp(e)

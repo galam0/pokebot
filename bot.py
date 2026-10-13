@@ -278,7 +278,7 @@ async def start_game(interaction: discord.Interaction, mode: str):
         return
     if mode == "adventure":
         content, embeds, view = ui.adventure_start_screen(slot)
-        sprites.prefetch(backs=A.STARTERS + list(K.RIVAL_STARTER.values()))
+        sprites.prefetch(backs=ui.REGIONS["관동"] + [4, 7, 1])
         title = f"{name}의 관동 모험"
     else:
         period = period_of(mode)
@@ -374,6 +374,7 @@ ADV_ACTIONS = {   # 모험 필드에서 하는 동작: (run, arg)
     "next": lambda run, arg: A.next_challenger(run, rng),
     "legend": lambda run, arg: A.meet_legend(run, rng),
     "gift": lambda run, arg: A.take_gift(run, rng),
+    "gift2": lambda run, arg: A.take_gift_choice(run, int(arg), rng),
     "heal": lambda run, arg: A.heal(run),
     "goto": lambda run, arg: A.move(run, arg, rng),
     "buy": _buy,
@@ -399,9 +400,16 @@ async def handle_component(interaction: discord.Interaction, custom_id: str):
         run = await get_run(uid, mode)
 
         # --- 스타팅 고르기 (게임이 없을 때) ---
-        if act in ("starter", "new"):
+        if act in ("starter", "new", "region"):
             if run and run["phase"] in ACTIVE:
                 await show(interaction, run, _main(slot, name, run))   # 이미 진행 중인 게임이 있으면 그 화면으로
+                return
+            if act == "region":   # 모험 시작: 다른 지방 스타팅 보기
+                region = (interaction.data.get("values") or ["관동"])[0]
+                content, embeds, view = ui.adventure_start_screen(slot, region)
+                ids = ui.REGIONS.get(region, [])
+                sprites.prefetch(backs=ids)
+                await interaction.response.edit_message(content=content or None, embeds=embeds, view=view, attachments=[])
                 return
             if act == "new":   # 데일리·챌린지가 끝난 화면의 버튼
                 await interaction.response.edit_message(view=None)
