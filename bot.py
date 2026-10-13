@@ -476,9 +476,9 @@ async def handle_component(interaction: discord.Interaction, custom_id: str):
                 E.buy(run, arg)
                 stay = "shop"
             elif act == "rel" and phase == "replace":
-                E.resolve_replace(run, int(arg))
+                E.resolve_replace(run, int(arg), rng)
             elif act == "relnew" and phase == "replace":
-                E.resolve_replace(run, None)
+                E.resolve_replace(run, None, rng)
             else:
                 await show(interaction, run, _main(slot, name, run))
                 return

@@ -530,7 +530,10 @@ def _cards(im, d, entries: list[dict], y0: int = 30, y1: int = 120):
         d.rectangle((x0 + 1, y0 + 1, x0 + w - 1, y0 + 12), fill=(232, 224, 200))
         _text(d, (x0 + 5, y0 + 1), f"{i + 1}", font=BOLD, fill=(160, 120, 40))
         icon = en.get("icon")
-        if icon is not None:
+        if en.get("pix") is not None:
+            pix = en["pix"]
+            im.paste(pix, (cx - pix.width // 2, y0 + 33 - pix.height // 2), pix)
+        elif icon is not None:
             icon = icon.convert("RGBA")
             icon = icon.resize((icon.width * 2, icon.height * 2), Image.NEAREST)
             im.paste(icon, (cx - icon.width // 2, y0 + 40 - icon.height // 2), icon)
@@ -540,11 +543,20 @@ def _cards(im, d, entries: list[dict], y0: int = 30, y1: int = 120):
             d.ellipse((cx - 12, y0 + 20, cx + 12, y0 + 44), fill=(232, 200, 120), outline=(160, 120, 40))
             _text(d, (cx - 3, y0 + 26), "?", font=BOLD, fill=(120, 80, 24))
         name = en["n"]
-        while _tw(name, BOLD) > w - 6 and len(name) > 2:
+        nf = BOLD if _tw(name, BOLD) <= w - 6 else FONT   # 길면 조금 얇은 글꼴로
+        while _tw(name, nf) > w - 6 and len(name) > 2:
             name = name[:-1]
-        _text(d, (cx - _tw(name, BOLD) // 2, y0 + 54), name, font=BOLD)
-        desc = en["d"].replace(" (", "\n(").split("\n") if " (" in en["d"] else _wrap(en["d"], w - 8)
-        for j, line in enumerate(desc[:2]):
+        _text(d, (cx - _tw(name, nf) // 2, y0 + 54), name, font=nf)
+        text = en["d"]
+        if ". " in text and _tw(text) > 2 * (w - 8):   # 카드에 안 들어가면 앞의 꾸밈말은 빼고
+            text = text.split(". ", 1)[1]
+        desc = _wrap(text, w - 8)
+        if len(desc) > 2:
+            desc = desc[:2]
+            while _tw(desc[1] + "…") > w - 6 and len(desc[1]) > 1:
+                desc[1] = desc[1][:-1]
+            desc[1] = desc[1].rstrip() + "…"
+        for j, line in enumerate(desc):
             while _tw(line) > w - 6 and len(line) > 2:
                 line = line[:-1]
             _text(d, (cx - _tw(line) // 2, y0 + 67 + j * 11), line, fill=(88, 88, 104))
@@ -575,39 +587,127 @@ def rewards(run: dict, get_sprite: SpriteGetter | None = None, get_item: ItemGet
 
 
 # ---------- 갈림길 ----------
-def _icon_rest(d, x, y):
-    d.polygon([(x - 10, y + 8), (x + 10, y + 8), (x, y - 12)], fill=(240, 120, 40), outline=(160, 64, 24))
-    d.polygon([(x - 5, y + 8), (x + 5, y + 8), (x, y - 3)], fill=(255, 220, 80))
-    d.rectangle((x - 12, y + 8, x + 12, y + 11), fill=(120, 80, 48))
+# 아이콘은 16x16 도트 (색만 칠하고 테두리는 자동으로 두른다). 카드에는 2배로 붙인다.
+_PIX_OUTLINE = (48, 32, 40, 255)
+_PIX = {
+    "rest": ({"R": (200, 48, 32), "O": (248, 128, 40), "Y": (255, 208, 64), "W": (255, 248, 200),
+              "b": (184, 120, 72), "B": (120, 72, 40), "g": (150, 150, 160)}, [
+        "................",
+        ".......R........",
+        "......RR........",
+        "......ROR....R..",
+        ".....ROOR...RR..",
+        ".....ROYOR..ROR.",
+        "..R.ROYYOR.ROOR.",
+        ".RR.ROYWYOROYOR.",
+        ".ROROYYWWYOOYOR.",
+        ".ROOOYWWWYYOOR..",
+        "..ROYYWWWWYYOR..",
+        "...ROYWWWWYOR...",
+        "BbbbROOOOOOORbbB",
+        "BBbbbbBBBBbbbbBB",
+        ".g.BBBBBBBBBB.g.",
+        "gg..........gg..",
+    ]),
+    "mystery": ({"P": (160, 104, 200), "p": (104, 56, 144), "G": (240, 192, 64), "y": (255, 240, 160),
+                 "Q": (255, 224, 72)}, [
+        ".....QQQQQ......",
+        "....QQ...QQ.....",
+        ".........QQ.....",
+        "........QQ......",
+        ".......QQ.......",
+        "................",
+        ".......QQ.......",
+        "................",
+        ".GPPPPPPPPPPPPG.",
+        "GPPPPPPPPPPPPPPG",
+        "GppppppGGppppppG",
+        "GGGGGGGyyGGGGGGG",
+        "GPPPPPPGGPPPPPPG",
+        "GPPPPPPPPPPPPPPG",
+        "GppppppppppppppG",
+        "GGGGGGGGGGGGGGGG",
+    ]),
+    "market": ({"R": (216, 56, 56), "W": (255, 248, 240), "D": (96, 72, 64), "T": (200, 144, 80),
+                "t": (160, 104, 56), "P": (176, 96, 208), "B": (88, 144, 240), "k": (48, 32, 40)}, [
+        "RRRWWWRRRWWWRRRW",
+        "RRRWWWRRRWWWRRRW",
+        "RRRWWWRRRWWWRRRW",
+        ".R..W..R..W..R..",
+        ".tDDDDDDDDDDDDt.",
+        ".tDDDDDDDDDDDDt.",
+        ".tDDPDDDDDRRRDt.",
+        ".tDPPPDBBDkWkDt.",
+        ".tDPPPDBBDWWWDt.",
+        "TTTTTTTTTTTTTTTT",
+        "TttttttttttttttT",
+        "TttttttttttttttT",
+        "TttttttttttttttT",
+        "TTTTTTTTTTTTTTTT",
+        ".t............t.",
+        ".t............t.",
+    ]),
+    "train": ({"S": (96, 104, 120), "L": (176, 184, 200), "H": (216, 216, 224), "h": (144, 144, 152),
+               "B": (120, 200, 255)}, [
+        "................",
+        "................",
+        "................",
+        "................",
+        ".LL..........LL.",
+        "LSSL........LSSL",
+        "LSSL........LSSL",
+        "LSSLHHHHHHHHLSSL",
+        "LSSLhhhhhhhhLSSL",
+        "LSSL........LSSL",
+        "LSSL........LSSL",
+        ".LL..........LL.",
+        "................",
+        "................",
+        "................",
+        "................",
+    ]),
+}
 
 
-def _icon_elite(d, x, y):
-    for sgn in (-1, 1):
-        d.line((x - 10 * sgn, y - 10, x + 10 * sgn, y + 10), fill=(160, 168, 184), width=3)
-        d.line((x - 6 * sgn, y + 2, x - 2 * sgn, y + 6), fill=(120, 80, 48), width=3)
-    d.ellipse((x - 3, y - 3, x + 3, y + 3), fill=(200, 48, 48))
+def _sword_icon() -> dict:
+    """강적의 길: 엇갈린 두 자루의 칼"""
+    px: dict[tuple[int, int], tuple] = {}
+    steel, edge, gold, grip = (240, 240, 248), (152, 160, 184), (240, 192, 64), (136, 80, 48)
+    for flip in (False, True):
+        put = (lambda x, y, c: px.__setitem__((15 - x if flip else x, y), c))
+        for t in range(10):
+            put(t, t, steel)
+            put(t + 1, t, edge)
+        for gx, gy in ((12, 9), (11, 10), (10, 11), (9, 12)):
+            put(gx, gy, gold)
+        for t in (11, 12, 13):
+            put(t, t, grip)
+        put(14, 14, gold)
+    return px
 
 
-def _icon_market(d, x, y):
-    d.rounded_rectangle((x - 11, y - 6, x + 11, y + 11), radius=3, fill=(200, 152, 72), outline=(120, 80, 32))
-    d.arc((x - 6, y - 14, x + 6, y - 2), 180, 360, fill=(120, 80, 32), width=2)
-    _text(d, (x - 4, y - 3), "₽", fill=(255, 248, 220))
+def _pix_image(key: str) -> Image.Image:
+    if key == "elite":
+        px = _sword_icon()
+    else:
+        pal, rows = _PIX[key]
+        px = {(x, y): pal[c] for y, row in enumerate(rows) for x, c in enumerate(row) if c != "."}
+    im = Image.new("RGBA", (18, 18), (0, 0, 0, 0))
+    for (x, y), c in px.items():
+        im.putpixel((x + 1, y + 1), tuple(c) + (255,))
+    # 테두리: 칠한 칸 옆(상하좌우)의 빈 칸
+    a = im.copy()
+    for y in range(18):
+        for x in range(18):
+            if a.getpixel((x, y))[3]:
+                continue
+            if any(0 <= x + dx < 18 and 0 <= y + dy < 18 and a.getpixel((x + dx, y + dy))[3]
+                   for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))):
+                im.putpixel((x, y), _PIX_OUTLINE)
+    return im.resize((36, 36), Image.NEAREST)
 
 
-def _icon_mystery(d, x, y):
-    d.rectangle((x - 11, y - 8, x + 11, y + 10), fill=(136, 88, 168), outline=(72, 40, 96))
-    d.rectangle((x - 11, y - 8, x + 11, y - 3), fill=(168, 120, 200), outline=(72, 40, 96))
-    _text(d, (x - 3, y - 2), "?", font=BOLD, fill=(255, 232, 120))
-
-
-def _icon_train(d, x, y):
-    d.rectangle((x - 9, y - 1, x + 9, y + 1), fill=(96, 96, 104))
-    for sx in (-12, 8):
-        d.rectangle((x + sx, y - 7, x + sx + 4, y + 7), fill=(64, 64, 72))
-
-
-PATH_ICON = {"rest": _icon_rest, "elite": _icon_elite, "market": _icon_market, "mystery": _icon_mystery,
-             "train": _icon_train}
+PATH_ICON = {k: _pix_image(k) for k in ("rest", "elite", "market", "mystery", "train")}
 
 
 def paths(run: dict, get_sprite: SpriteGetter | None = None) -> bytes:
@@ -620,7 +720,7 @@ def paths(run: dict, get_sprite: SpriteGetter | None = None) -> bytes:
     entries = []
     for key in run.get("paths", []):
         pth = E.PATHS[key]
-        entries.append({"n": pth["n"].split(" ", 1)[1], "d": pth["d"], "draw": PATH_ICON[key]})
+        entries.append({"n": pth["n"].split(" ", 1)[1], "d": pth["d"], "pix": PATH_ICON[key]})
     _cards(im, d, entries)
     _party_strip(im, d, run, get_sprite, 8, 126)
     return _finish(im, d)

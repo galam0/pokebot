@@ -100,11 +100,11 @@ def allowed(run: dict, sid: int) -> bool:
 
 # ---------- 갈림길 (몇 웨이브마다 다음 길 고르기) ----------
 PATHS = {
-    "rest":    {"n": "🏕️ 쉼터", "d": "살아 있는 파티 HP 50% 회복, 기절한 포켓몬은 HP 25%로 깨어남"},
-    "elite":   {"n": "⚔️ 강적의 길", "d": "다음 상대가 4레벨 더 강하지만 돈 2배, 보상 4개 중 고르기"},
-    "market":  {"n": "🛒 떠돌이 상인", "d": "다음 보상 때 상점 30% 할인"},
-    "mystery": {"n": "❓ 수상한 상자", "d": "아이템이나 돈이 나올 수도, 기습을 당할 수도"},
-    "train":   {"n": "🥋 수련장", "d": "파티 전원이 다음 레벨까지 필요한 경험치의 절반을 얻음"},
+    "rest":    {"n": "🏕️ 쉼터", "d": "푹 쉬면 HP가 차고 기절한 포켓몬도 깬다"},
+    "elite":   {"n": "⚔️ 강적의 길", "d": "센 상대가 나오는 대신 돈 2배, 보상 4개"},
+    "market":  {"n": "🛒 떠돌이 상인", "d": "다음 상점에서 30% 싸게 살 수 있다"},
+    "mystery": {"n": "❓ 수상한 상자", "d": "뭐가 들었을까? 함정일지도 모른다"},
+    "train":   {"n": "🥋 수련장", "d": "파티 모두가 경험치를 듬뿍 얻는다"},
 }
 PATH_AFTER = (3, 6)   # 각 10웨이브 구간에서 3, 6웨이브를 깬 뒤 갈림길
 
@@ -114,15 +114,15 @@ STRUGGLE = {"n": "발버둥", "t": 0, "p": 50, "a": None, "c": 0, "pr": 0, "pp":
 
 # ---------- 지닌 물건 ----------
 HELD = {
-    "leftovers":     "매 턴 끝에 HP 1/16 회복",
-    "shell-bell":    "준 데미지의 1/8만큼 HP 회복",
-    "focus-sash":    "HP가 가득할 때 한 방에 쓰러질 공격을 HP 1로 버팀 (웨이브마다 1번)",
-    "life-orb":      "기술 위력 1.3배, 공격할 때마다 HP 10% 반동",
-    "choice-band":   "공격 1.5배, 처음 쓴 기술만 계속 써야 함",
-    "choice-specs":  "특공 1.5배, 처음 쓴 기술만 계속 써야 함",
-    "choice-scarf":  "스피드 1.5배, 처음 쓴 기술만 계속 써야 함",
-    "lucky-egg":     "얻는 경험치 1.5배",
-    "scope-lens":    "급소에 맞히기 쉬워짐",
+    "leftovers":     "매 턴 HP가 조금씩 회복된다",
+    "shell-bell":    "공격하면 준 데미지만큼 조금 회복된다",
+    "focus-sash":    "HP가 가득할 땐 한 방을 버텨 낸다",
+    "life-orb":      "기술이 세지지만 쓸 때마다 HP가 깎인다",
+    "choice-band":   "공격이 오르지만 한 기술만 쓸 수 있다",
+    "choice-specs":  "특공이 오르지만 한 기술만 쓸 수 있다",
+    "choice-scarf":  "스피드가 오르지만 한 기술만 쓸 수 있다",
+    "lucky-egg":     "배틀에서 얻는 경험치가 늘어난다",
+    "scope-lens":    "기술이 급소에 맞기 쉬워진다",
 }
 TYPE_BOOST = {   # 타입 강화 아이템 → 타입 (위력 1.2배)
     "silk-scarf": 1, "black-belt": 2, "sharp-beak": 3, "poison-barb": 4, "soft-sand": 5, "hard-stone": 6,
@@ -131,7 +131,7 @@ TYPE_BOOST = {   # 타입 강화 아이템 → 타입 (위력 1.2배)
     "fairy-feather": 18,
 }
 for _k, _t in TYPE_BOOST.items():
-    HELD[_k] = f"{D.TYPE_KO[_t]} 타입 기술 위력 1.2배"
+    HELD[_k] = f"{D.TYPE_KO[_t]} 타입 기술이 강해진다"
 CHOICE = {"choice-band": 1, "choice-specs": 3, "choice-scarf": 5}
 
 
@@ -323,6 +323,8 @@ def normalize(run: dict) -> dict:
         m.setdefault("sash", 0)
         m.setdefault("pend", [])
         fix_pp(m)
+    if run.get("phase") == "learn" and learner(run) is None:   # 예전 버그로 멈춘 게임 풀기
+        run["phase"] = "reward"
     return run
 
 
@@ -787,51 +789,51 @@ def switch(run: dict, index: int, rng: random.Random | None = None) -> str:
 # ---------- 가방 아이템 ----------
 # cat: ball(볼) heal(회복) status(상태이상) revive(기절) pp(PP) ppup(최대 PP) battle(배틀용) evo(진화) held(지닌 물건)
 ITEMS: dict[str, dict] = {
-    "poke-ball":    {"cat": "ball", "ball": 1.0, "price": 200, "d": "야생 포켓몬을 잡는다"},
-    "great-ball":   {"cat": "ball", "ball": 1.5, "price": 600, "d": "몬스터볼보다 잘 잡힌다 (1.5배)"},
-    "ultra-ball":   {"cat": "ball", "ball": 2.0, "price": 1200, "d": "아주 잘 잡힌다 (2배)"},
-    "quick-ball":   {"cat": "ball", "ball": "quick", "price": 1000, "d": "배틀 첫 턴에 아주 잘 잡힌다 (5배, 이후 1배)"},
-    "timer-ball":   {"cat": "ball", "ball": "timer", "price": 1000, "d": "턴이 지날수록 잘 잡힌다 (최대 4배)"},
-    "net-ball":     {"cat": "ball", "ball": "net", "price": 1000, "d": "물·벌레 타입이 아주 잘 잡힌다 (3.5배)"},
-    "heal-ball":    {"cat": "ball", "ball": "heal", "price": 300, "d": "잡힌 포켓몬이 바로 회복된다 (1배)"},
-    "master-ball":  {"cat": "ball", "ball": 255.0, "price": 0, "d": "반드시 잡힌다"},
-    "potion":       {"cat": "heal", "heal": 0.25, "price": 300, "d": "HP를 25% 회복"},
-    "super-potion": {"cat": "heal", "heal": 0.5, "price": 700, "d": "HP를 50% 회복"},
-    "hyper-potion": {"cat": "heal", "heal": 0.75, "price": 1200, "d": "HP를 75% 회복"},
-    "max-potion":   {"cat": "heal", "heal": 1.0, "price": 2500, "d": "HP를 모두 회복"},
-    "full-restore": {"cat": "heal", "heal": 1.0, "cure": "all", "price": 3000, "d": "HP와 상태이상을 모두 회복"},
-    "fresh-water":  {"cat": "heal", "heal": 0.3, "price": 0, "d": "HP를 30% 회복"},
-    "soda-pop":     {"cat": "heal", "heal": 0.4, "price": 0, "d": "HP를 40% 회복"},
-    "lemonade":     {"cat": "heal", "heal": 0.5, "price": 0, "d": "HP를 50% 회복"},
-    "moomoo-milk":  {"cat": "heal", "heal": 0.6, "price": 0, "d": "HP를 60% 회복"},
-    "antidote":     {"cat": "status", "cure": "psn", "price": 100, "d": "독 회복"},
-    "paralyze-heal": {"cat": "status", "cure": "par", "price": 200, "d": "마비 회복"},
-    "burn-heal":    {"cat": "status", "cure": "brn", "price": 200, "d": "화상 회복"},
-    "ice-heal":     {"cat": "status", "cure": "frz", "price": 200, "d": "얼음 회복"},
-    "full-heal":    {"cat": "status", "cure": "all", "price": 400, "d": "모든 상태이상 회복"},
-    "revive":       {"cat": "revive", "revive": 0.5, "price": 1500, "d": "기절한 포켓몬을 HP 50%로 살린다"},
-    "max-revive":   {"cat": "revive", "revive": 1.0, "price": 4000, "d": "기절한 포켓몬을 HP 100%로 살린다"},
-    "sacred-ash":   {"cat": "revive", "revive": 1.0, "all": True, "price": 0, "d": "기절한 파티 전원을 HP 100%로 살린다"},
-    "ether":        {"cat": "pp", "pp": 10, "one": True, "price": 1200, "d": "기술 하나의 PP를 10 회복"},
-    "max-ether":    {"cat": "pp", "pp": None, "one": True, "price": 2000, "d": "기술 하나의 PP를 모두 회복"},
-    "elixir":       {"cat": "pp", "pp": 10, "one": False, "price": 3000, "d": "모든 기술의 PP를 10씩 회복"},
-    "max-elixir":   {"cat": "pp", "pp": None, "one": False, "price": 4500, "d": "모든 기술의 PP를 모두 회복"},
-    "pp-up":        {"cat": "ppup", "ppx": 1, "price": 0, "d": "기술 하나의 최대 PP +20% (3번까지)"},
-    "pp-max":       {"cat": "ppup", "ppx": 3, "price": 0, "d": "기술 하나의 최대 PP를 최대로 (+60%)"},
-    "x-attack":     {"cat": "battle", "stage": 0, "price": 500, "d": "배틀 중 공격 2랭크 업"},
-    "x-defense":    {"cat": "battle", "stage": 1, "price": 550, "d": "배틀 중 방어 2랭크 업"},
-    "x-sp-atk":     {"cat": "battle", "stage": 2, "price": 600, "d": "배틀 중 특공 2랭크 업"},
-    "x-sp-def":     {"cat": "battle", "stage": 3, "price": 550, "d": "배틀 중 특방 2랭크 업"},
-    "x-speed":      {"cat": "battle", "stage": 4, "price": 700, "d": "배틀 중 스피드 2랭크 업"},
-    "dire-hit":     {"cat": "battle", "crit": 2, "price": 650, "d": "배틀 중 급소에 아주 잘 맞힌다"},
-    "linking-cord": {"cat": "evo", "price": 0, "d": "통신 교환으로 진화하는 포켓몬을 진화시킨다"},
+    "poke-ball":    {"cat": "ball", "ball": 1.0, "price": 200, "d": "야생 포켓몬에게 던져서 잡는 볼"},
+    "great-ball":   {"cat": "ball", "ball": 1.5, "price": 600, "d": "몬스터볼보다 잘 잡히는 볼"},
+    "ultra-ball":   {"cat": "ball", "ball": 2.0, "price": 1200, "d": "슈퍼볼보다 더 잘 잡히는 볼"},
+    "quick-ball":   {"cat": "ball", "ball": "quick", "price": 1000, "d": "배틀을 시작하자마자 던지면 잘 잡힌다"},
+    "timer-ball":   {"cat": "ball", "ball": "timer", "price": 1000, "d": "배틀이 길어질수록 잘 잡힌다"},
+    "net-ball":     {"cat": "ball", "ball": "net", "price": 1000, "d": "물이나 벌레 타입이 잘 잡힌다"},
+    "heal-ball":    {"cat": "ball", "ball": "heal", "price": 300, "d": "잡은 포켓몬의 HP가 가득 찬다"},
+    "master-ball":  {"cat": "ball", "ball": 255.0, "price": 0, "d": "어떤 포켓몬이든 반드시 잡힌다"},
+    "potion":       {"cat": "heal", "heal": 0.25, "price": 300, "d": "HP를 25% 회복한다"},
+    "super-potion": {"cat": "heal", "heal": 0.5, "price": 700, "d": "HP를 50% 회복한다"},
+    "hyper-potion": {"cat": "heal", "heal": 0.75, "price": 1200, "d": "HP를 75% 회복한다"},
+    "max-potion":   {"cat": "heal", "heal": 1.0, "price": 2500, "d": "HP를 전부 회복한다"},
+    "full-restore": {"cat": "heal", "heal": 1.0, "cure": "all", "price": 3000, "d": "HP와 상태이상을 전부 회복한다"},
+    "fresh-water":  {"cat": "heal", "heal": 0.3, "price": 0, "d": "시원한 물. HP를 30% 회복한다"},
+    "soda-pop":     {"cat": "heal", "heal": 0.4, "price": 0, "d": "톡 쏘는 사이다. HP를 40% 회복한다"},
+    "lemonade":     {"cat": "heal", "heal": 0.5, "price": 0, "d": "달콤한 음료. HP를 50% 회복한다"},
+    "moomoo-milk":  {"cat": "heal", "heal": 0.6, "price": 0, "d": "고소한 우유. HP를 60% 회복한다"},
+    "antidote":     {"cat": "status", "cure": "psn", "price": 100, "d": "독을 치료한다"},
+    "paralyze-heal": {"cat": "status", "cure": "par", "price": 200, "d": "마비를 풀어 준다"},
+    "burn-heal":    {"cat": "status", "cure": "brn", "price": 200, "d": "화상을 치료한다"},
+    "ice-heal":     {"cat": "status", "cure": "frz", "price": 200, "d": "얼어붙은 몸을 녹인다"},
+    "full-heal":    {"cat": "status", "cure": "all", "price": 400, "d": "상태이상을 전부 치료한다"},
+    "revive":       {"cat": "revive", "revive": 0.5, "price": 1500, "d": "기절한 포켓몬을 HP 절반으로 깨운다"},
+    "max-revive":   {"cat": "revive", "revive": 1.0, "price": 4000, "d": "기절한 포켓몬을 완전히 깨운다"},
+    "sacred-ash":   {"cat": "revive", "revive": 1.0, "all": True, "price": 0, "d": "기절한 파티 포켓몬을 모두 되살린다"},
+    "ether":        {"cat": "pp", "pp": 10, "one": True, "price": 1200, "d": "기술 하나의 PP를 10 회복한다"},
+    "max-ether":    {"cat": "pp", "pp": None, "one": True, "price": 2000, "d": "기술 하나의 PP를 전부 회복한다"},
+    "elixir":       {"cat": "pp", "pp": 10, "one": False, "price": 3000, "d": "모든 기술의 PP를 10씩 회복한다"},
+    "max-elixir":   {"cat": "pp", "pp": None, "one": False, "price": 4500, "d": "모든 기술의 PP를 전부 회복한다"},
+    "pp-up":        {"cat": "ppup", "ppx": 1, "price": 0, "d": "기술 하나의 최대 PP가 늘어난다"},
+    "pp-max":       {"cat": "ppup", "ppx": 3, "price": 0, "d": "기술 하나의 최대 PP를 끝까지 늘린다"},
+    "x-attack":     {"cat": "battle", "stage": 0, "price": 500, "d": "배틀 동안 공격이 크게 오른다"},
+    "x-defense":    {"cat": "battle", "stage": 1, "price": 550, "d": "배틀 동안 방어가 크게 오른다"},
+    "x-sp-atk":     {"cat": "battle", "stage": 2, "price": 600, "d": "배틀 동안 특공이 크게 오른다"},
+    "x-sp-def":     {"cat": "battle", "stage": 3, "price": 550, "d": "배틀 동안 특방이 크게 오른다"},
+    "x-speed":      {"cat": "battle", "stage": 4, "price": 700, "d": "배틀 동안 스피드가 크게 오른다"},
+    "dire-hit":     {"cat": "battle", "crit": 2, "price": 650, "d": "배틀 동안 급소에 훨씬 잘 맞는다"},
+    "linking-cord": {"cat": "evo", "price": 0, "d": "교환해야 진화하는 포켓몬을 진화시킨다"},
 }
 for _h, _d in HELD.items():
     ITEMS[_h] = {"cat": "held", "price": 0, "d": _d}
 for _sp in D.SPECIES.values():   # 진화의 돌 등 진화 아이템
     for _c, _how, _val in _sp["evo"]:
         if _how == "item" and _val not in ITEMS:
-            ITEMS[_val] = {"cat": "evo", "price": 0, "d": "특정 포켓몬을 진화시킨다"}
+            ITEMS[_val] = {"cat": "evo", "price": 0, "d": "쓰면 진화하는 포켓몬이 있다"}
 CAT_ORDER = ["ball", "heal", "status", "revive", "pp", "ppup", "battle", "evo", "held"]
 CAT_KO = {"ball": "볼", "heal": "회복", "status": "상태이상", "revive": "기절 회복", "pp": "PP 회복",
           "ppup": "PP 늘리기", "battle": "배틀용", "evo": "진화", "held": "지닌 물건"}
@@ -1065,7 +1067,7 @@ def throw_ball(run: dict, item: str, rng: random.Random | None = None) -> str:
     return _after_enemy_action(run, log, rng)
 
 
-def resolve_replace(run: dict, release: int | None) -> list[str]:
+def resolve_replace(run: dict, release: int | None, rng: random.Random | None = None) -> list[str]:
     """파티가 가득 찼을 때: release 번호의 포켓몬을 놓아주고 새 포켓몬을 넣는다. None이면 새 포켓몬을 놓아준다."""
     pend = run.pop("pending")
     new = pend["mon"]
@@ -1081,6 +1083,10 @@ def resolve_replace(run: dict, release: int | None) -> list[str]:
         if run["active"] == release and new["hp"] <= 0:
             run["active"] = alive(run)[0]
     run["phase"] = pend["then"]
+    if run["phase"] == "learn" and learner(run) is None:   # 기술을 배우려던 포켓몬을 놓아준 경우
+        run["phase"] = "reward"
+        if run.pop("after_learn", "reward") == "next_wave":
+            msgs.extend(advance(run, rng or random.Random()))
     run["log"] = msgs
     return msgs
 
@@ -1269,16 +1275,16 @@ REWARDS = {
     "xdefense": {"kind": "bag", "item": ("x-defense", 2), "w": 1},
     "xspdef":   {"kind": "bag", "item": ("x-sp-def", 2), "w": 1},
     "direhit":  {"kind": "bag", "item": ("dire-hit", 2), "w": 1},
-    "candy":    {"kind": "target", "n": "이상한사탕", "d": "포켓몬 하나의 레벨 +1", "icon": "rare-candy", "w": 10},
-    "candy3":   {"kind": "target", "n": "이상한사탕 x3", "d": "포켓몬 하나의 레벨 +3", "icon": "rare-candy", "w": 2},
+    "candy":    {"kind": "target", "n": "이상한사탕", "d": "레벨이 1 오른다", "icon": "rare-candy", "w": 10},
+    "candy3":   {"kind": "target", "n": "이상한사탕 x3", "d": "레벨이 3 오른다", "icon": "rare-candy", "w": 2},
     "hpup":     {"kind": "target", "vit": 0, "icon": "hp-up", "w": 2},
     "protein":  {"kind": "target", "vit": 1, "icon": "protein", "w": 2},
     "iron":     {"kind": "target", "vit": 2, "icon": "iron", "w": 2},
     "calcium":  {"kind": "target", "vit": 3, "icon": "calcium", "w": 2},
     "zinc":     {"kind": "target", "vit": 4, "icon": "zinc", "w": 2},
     "carbos":   {"kind": "target", "vit": 5, "icon": "carbos", "w": 2},
-    "expcharm": {"kind": "run", "n": "학습장치", "d": "얻는 경험치 +25% (이번 게임)", "icon": "exp-share", "w": 3},
-    "nugget":   {"kind": "money", "n": "금구슬", "d": "돈을 받는다", "icon": "nugget", "w": 5},
+    "expcharm": {"kind": "run", "n": "학습장치", "d": "이번 게임 동안 경험치를 더 받는다", "icon": "exp-share", "w": 3},
+    "nugget":   {"kind": "money", "n": "금구슬", "d": "팔면 돈이 되는 금빛 구슬", "icon": "nugget", "w": 5},
 }
 TM_WEIGHT, HELD_WEIGHT, EVO_WEIGHT = 7, 5, 6
 MAX_VITAMIN = 10
@@ -1304,12 +1310,12 @@ def reward_info(key: str, run: dict | None = None) -> dict:
             names = [D.name(x["sid"]) for i, x in enumerate(run["party"]) if i in _tm_targets(run, int(val))]
             who = (" · " + ", ".join(names[:3]) + (" 등" if len(names) > 3 else "")) if names else ""
         return {"kind": "tm", "n": f"기술머신 {m['n']}",
-                "d": f"{D.TYPE_KO[m['t']]} {'물리' if m['c'] == 0 else '특수'} {m['p']}{who}",
+                "d": f"{D.TYPE_KO[m['t']]} {'물리' if m['c'] == 0 else '특수'} 위력 {m['p']}{who}",
                 "icon": f"tm-{D.TYPE_EN[m['t']]}"}
     if kind == "held":
-        return {"kind": "held", "n": item_name(val), "d": "지닌 물건: " + HELD[val], "icon": val}
+        return {"kind": "held", "n": item_name(val), "d": HELD[val], "icon": val}
     if kind == "evo":
-        return {"kind": "evo", "n": item_name(val), "d": "포켓몬을 진화시킨다", "icon": val}
+        return {"kind": "evo", "n": item_name(val), "d": "쓰면 진화하는 포켓몬이 있다", "icon": val}
     r = dict(REWARDS[key])
     if r["kind"] == "bag":
         item, cnt = r["item"]
@@ -1318,7 +1324,7 @@ def reward_info(key: str, run: dict | None = None) -> dict:
         r.setdefault("icon", item)
     elif "vit" in r:
         r["n"] = item_name(r["icon"])
-        r["d"] = f"포켓몬 하나의 {D.STAT_KO[r['vit']]} +10%"
+        r["d"] = f"{D.STAT_KO[r['vit']]} 능력치가 오른다"
     return r
 
 
