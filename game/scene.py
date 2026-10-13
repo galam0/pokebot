@@ -169,6 +169,47 @@ def _bar(d, x, y, w, h, ratio, fg, bg=(64, 64, 72), edge=INK):
         d.rectangle((x + 1, y + 1, x + fw, y + h - 1), fill=fg)
 
 
+# ---------- 게임풍 HP / EXP 게이지 ----------
+_GAUGE = {   # (위쪽 밝은 줄, 본색, 아래쪽 어두운 줄)
+    "green": ((168, 248, 168), (88, 208, 96), (48, 144, 64)),
+    "yellow": ((255, 236, 136), (240, 192, 40), (184, 136, 16)),
+    "red": ((255, 160, 144), (232, 72, 64), (168, 32, 32)),
+    "exp": ((152, 216, 255), (72, 160, 240), (40, 104, 192)),
+}
+_GAUGE_FRAME = (48, 48, 60)
+_GAUGE_EMPTY = ((112, 112, 124), (84, 84, 96), (72, 72, 84))
+
+
+def _gauge_rows(d, x0, x1, y, ratio, colors):
+    """x0~x1 사이를 ratio만큼 3단 색으로 채운다 (y부터 5줄: 밝은 1 / 본색 3 / 어두운 1)"""
+    fill_to = x0 - 1 + (0 if ratio <= 0 else max(1, round((x1 - x0 + 1) * min(1.0, ratio))))
+    rows = [0, 1, 1, 1, 2]
+    for i, k in enumerate(rows):
+        d.line((x0, y + i, x1, y + i), fill=_GAUGE_EMPTY[k])
+        if fill_to >= x0:
+            d.line((x0, y + i, fill_to, y + i), fill=colors[k])
+
+
+def _hp_gauge(d, x, y, w, ratio):
+    """[HP|■■■■■□□] 캡슐 모양 HP 게이지 (높이 9)"""
+    d.rounded_rectangle((x, y, x + w, y + 8), radius=2, fill=_GAUGE_FRAME)
+    _pixel_text(d, x + 3, y + 1, "HP", (248, 200, 64), False, None)
+    key = "green" if ratio > 0.5 else ("yellow" if ratio > 0.2 else "red")
+    _gauge_rows(d, x + 16, x + w - 2, y + 2, ratio, _GAUGE[key])
+
+
+def _exp_gauge(d, x, y, w, ratio):
+    """얇은 EXP 게이지 (높이 4)"""
+    d.rectangle((x, y, x + w, y + 3), fill=_GAUGE_FRAME)
+    x0, x1 = x + 1, x + w - 1
+    fill_to = x0 - 1 + (0 if ratio <= 0 else max(1, round((x1 - x0 + 1) * min(1.0, ratio))))
+    d.line((x0, y + 1, x1, y + 1), fill=_GAUGE_EMPTY[1])
+    d.line((x0, y + 2, x1, y + 2), fill=_GAUGE_EMPTY[2])
+    if fill_to >= x0:
+        d.line((x0, y + 1, fill_to, y + 1), fill=_GAUGE["exp"][0])
+        d.line((x0, y + 2, fill_to, y + 2), fill=_GAUGE["exp"][2])
+
+
 def _hp_color(ratio: float):
     return (88, 208, 96) if ratio > 0.5 else (240, 200, 48) if ratio > 0.2 else (232, 72, 64)
 
@@ -269,8 +310,7 @@ def battle(run: dict, get_sprite: SpriteGetter | None = None, message: list[str]
         lv = f"Lv.{e['lv']}"
         _text(d, (140 - _tw(lv), 12), lv)
         r = e["hp"] / E.max_hp(e)
-        _text(d, (12, 28), "HP", font=BOLD, fill=(232, 160, 32))
-        _bar(d, 28, 30, 110, 6, r, _hp_color(r))
+        _hp_gauge(d, 12, 28, 128, r)
 
     # 내 정보창
     _panel(d, (172, 98, 314, 142))
@@ -281,13 +321,12 @@ def battle(run: dict, get_sprite: SpriteGetter | None = None, message: list[str]
     _text(d, (308 - _tw(lv), 102), lv)
     mh = E.max_hp(p)
     r = p["hp"] / mh
-    _text(d, (178, 116), "HP", font=BOLD, fill=(232, 160, 32))
-    _bar(d, 194, 118, 114, 6, r, _hp_color(r))
+    _hp_gauge(d, 178, 115, 130, r)
     hp_txt = f"{p['hp']}/{mh}"
-    _text(d, (308 - _tw(hp_txt), 125), hp_txt)
+    _text(d, (308 - _tw(hp_txt), 123), hp_txt)
     need = E.exp_to_next(p)
-    _bar(d, 178, 138, 130, 2, (p["exp"] / need) if need else 1, (64, 160, 240), bg=(200, 200, 208), edge=(200, 200, 208))
-    _text(d, (178, 125), "EXP", fill=(64, 128, 200))
+    _text(d, (178, 131), "EXP", fill=(64, 128, 200))
+    _exp_gauge(d, 198, 135, 110, (p["exp"] / need) if need else 1)
 
     # 웨이브 표시 (오른쪽 위 작게)
     tag = f"WAVE {wave}" + (" BOSS" if E.is_boss_wave(wave) else "")
@@ -362,12 +401,11 @@ def summary(run: dict, get_sprite: SpriteGetter | None = None) -> bytes:
     _status_tag(d, 122 + _tw(D.name(p["sid"]), BOLD) + 4, 27, p.get("status"))
     mh = E.max_hp(p)
     r = p["hp"] / mh
-    _text(d, (122, 39), "HP", font=BOLD, fill=(232, 160, 32))
-    _bar(d, 140, 41, 110, 6, r, _hp_color(r))
-    _text(d, (256, 39), f"{p['hp']}/{mh}")
+    _hp_gauge(d, 122, 39, 130, r)
+    _text(d, (258, 39), f"{p['hp']}/{mh}")
     need = E.exp_to_next(p)
     _text(d, (122, 50), "EXP", fill=(64, 128, 200))
-    _bar(d, 146, 53, 104, 4, (p["exp"] / need) if need else 1, (64, 160, 240), bg=(208, 208, 216))
+    _exp_gauge(d, 144, 53, 108, (p["exp"] / need) if need else 1)
     _text(d, (256, 50), f"다음 {need - p['exp']}" if need else "MAX")
     d.line((122, 63, 308, 63), fill=(216, 216, 208))
     stats = E.stats_line(p)
@@ -375,7 +413,10 @@ def summary(run: dict, get_sprite: SpriteGetter | None = None) -> bytes:
     for i, (n, v) in enumerate(stats):
         y = 64 + i * 11
         _text(d, (122, y), n)
-        _bar(d, 156, y + 3, 92, 4, v / top, STAT_RGB[i], bg=(216, 216, 224), edge=(160, 160, 176))
+        col = STAT_RGB[i]
+        d.rectangle((156, y + 2, 250, y + 8), fill=_GAUGE_FRAME)
+        _gauge_rows(d, 157, 249, y + 3, v / top,
+                    (tuple(min(255, c + 70) for c in col), col, tuple(max(0, c - 60) for c in col)))
         vt = str(v) + ("+" if p["vit"][i] else "")
         _text(d, (308 - _tw(vt), y), vt, font=BOLD if p["vit"][i] else FONT)
 
@@ -456,11 +497,10 @@ def rewards(run: dict, get_sprite: SpriteGetter | None = None, get_item: ItemGet
     _text(d, (304 - _tw(lv), 134), lv)
     mh = E.max_hp(p)
     r = p["hp"] / mh
-    _text(d, (66, 150), "HP", font=BOLD, fill=(232, 160, 32))
-    _bar(d, 84, 152, 160, 6, r, _hp_color(r))
+    _hp_gauge(d, 66, 150, 178, r)
     _text(d, (250, 150), f"{p['hp']}/{mh}")
     need = E.exp_to_next(p)
     _text(d, (66, 166), "EXP", fill=(64, 128, 200))
-    _bar(d, 90, 169, 154, 4, (p["exp"] / need) if need else 1, (64, 160, 240), bg=(208, 208, 216))
+    _exp_gauge(d, 88, 168, 156, (p["exp"] / need) if need else 1)
     _text(d, (250, 166), f"다음 {need - p['exp']}" if need else "MAX")
     return _finish(im, d)
