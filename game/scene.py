@@ -17,6 +17,7 @@ from . import data as D
 from . import adventure as A
 from . import engine as E
 from . import heroes as HR
+from . import trainer_pics as TP
 from . import hoenn as HO
 from . import johto as J
 from . import kanto as K
@@ -635,6 +636,46 @@ def _message_box(d, lines: list[str]):
     for s in rows[-3:]:
         _text(d, (11, y), s, fill=(248, 248, 248), shadow=(16, 24, 40))
         y += 12
+
+
+# ---------- 트레이너 등장 ----------
+def trainer_intro(run: dict) -> bytes:
+    """포켓몬이 나오기 전: 상대 트레이너가 서 있고, 대사가 나온다 (주인공은 뒷모습)"""
+    b = run.get("battle") or {}
+    region = A.region_of(run["loc"])
+    im, d = _canvas()
+    biome = A.loc(run)["bg"]
+    _background(d, biome)
+    _platform(d, 236, 86, 52, 12, biome)
+    _platform(d, 78, 146, 60, 14, biome)
+    foe = _asset(f"battle/{TP.opponent(region, b)}.png") if TP.opponent(region, b) else None
+    if foe:
+        _put(im, d, foe, 236, 88, 96, 84)
+    me = _asset(f"battle/{TP.player_back(HR.of(run))}.png")
+    if me:
+        _put(im, d, me, 78, 152, 120, 110, kmax=BACK_ZOOM)
+    # 양쪽 포켓몬 수 (볼)
+    def balls(x0, y0, n, alive, right=False):
+        d.rounded_rectangle((x0 - 4, y0 - 3, x0 + 6 * 9 + 2, y0 + 9), radius=3, fill=(40, 48, 64), outline=(248, 248, 240))
+        for i in range(6):
+            bx = x0 + (5 - i if right else i) * 9
+            if i < n:
+                top = (224, 64, 56) if i < alive else (128, 128, 136)
+                d.ellipse((bx, y0, bx + 6, y0 + 6), fill=(248, 248, 248), outline=INK)
+                d.chord((bx, y0, bx + 6, y0 + 6), 180, 360, fill=top, outline=INK)
+            else:
+                d.ellipse((bx + 1, y0 + 1, bx + 5, y0 + 5), outline=(120, 128, 144))
+    balls(12, 20, b.get("total", 1), b.get("total", 1))
+    balls(254, 118, len(run["party"]), len(E.alive(run)), right=True)
+    name = b.get("name", "트레이너")
+    lines = [f"{name}이(가) 승부를 걸어왔다!"]
+    if b.get("line"):
+        lines.append(f"\"{b['line']}\"")
+    _message_box(d, lines)
+    if run.get("loc"):
+        tag = A.loc(run)["n"]
+        _text(d, (W - _tw(tag, SMALL) - 6, 2), tag, font=SMALL, fill=(255, 255, 255), shadow=(0, 0, 0))
+    return _finish(im, d)
 
 
 # ---------- 상태창 ----------

@@ -219,8 +219,8 @@ def _start_trainer(run: dict, spec: dict, rng: random.Random, chain: list[dict] 
     mons = _team(spec["team"], rng, spec.get("iv", 12))
     prize = K.PRIZE[spec["cls"]] * spec["team"][-1][1]
     meta = {k: v for k, v in spec.items() if k not in ("team",)}
-    _begin(run, spec["kind"], mons, spec["name"], prize=prize, chain=chain or [], **{k: v for k, v in meta.items()
-                                                                                     if k not in ("kind", "name")})
+    _begin(run, spec["kind"], mons, spec["name"], prize=prize, chain=chain or [], intro=True,   # 등장 장면부터
+           **{k: v for k, v in meta.items() if k not in ("kind", "name")})
     msgs = [f"⚔️ **{spec['name']}**이(가) 승부를 걸어왔다!"]
     if spec.get("line"):
         msgs.append(f"\"{spec['line']}\"")

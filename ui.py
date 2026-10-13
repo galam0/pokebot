@@ -275,6 +275,16 @@ def battle_screen(uid: int, trainer: str, run: dict, image: bool = True) -> Scre
     embed = _base_embed(trainer, run)
     view = discord.ui.View(timeout=None)
 
+    if phase == "battle" and (run.get("battle") or {}).get("intro"):   # 포켓몬이 나오기 전: 트레이너 등장
+        b = run["battle"]
+        embed.description = josa(f"**{b['name']}**이(가) 승부를 걸어왔다!" + (f"\n\"{b['line']}\"" if b.get("line") else ""))
+        if image:
+            embed.set_image(url=f"attachment://{SCENE_FILE}")
+        _btn(view, "승부!", uid, ver, "fight", style=B.danger, emoji="⚔️", row=0)
+        _btn(view, "파티", uid, ver, "party", emoji="📋", row=0)
+        embed.set_footer(text=f"{b['name']}의 포켓몬 {b.get('total', 1)}마리 · 승부를 누르면 포켓몬이 나와요.")
+        return Screen(embed, _frozen(view), "intro")
+
     if phase == "battle":
         p, e = E.lead(run), run["e"]
         _image(embed, run, image)
@@ -835,6 +845,7 @@ HELP = {   # 주제: (메뉴 이름, 이모지, 한 줄 설명, [(제목, 내용
                        "🏃 도망치기는 야생·전설 배틀에서만 돼요."),
         ("잡기", "야생 포켓몬에게 볼을 던져요. HP가 적을수록, 상태이상일수록 잘 잡혀요. 다른 트레이너의 포켓몬은 못 잡아요."),
         ("상태이상", "마비·화상·독·얼음 상태가 되면 정보창 HP 아래에 표시돼요. 센터나 회복약으로 고쳐요."),
+        ("트레이너 등장", "트레이너·관장·라이벌과 싸울 때는 먼저 상대가 나와서 대사를 해요. ⚔️ 승부!를 누르면 포켓몬이 나와요."),
         ("배틀 화면", "배틀 화면은 움직이는 그림(GIF)이에요. 1~5세대는 블랙·화이트처럼 움직이고, 6세대부터는 통통 뛰어요."),
     ]),
     "growth": ("성장·진화", "⬆️", "레벨업·기술·진화·물건", [

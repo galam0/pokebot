@@ -192,6 +192,9 @@ async def render(run: dict, kind: str = "scene", **kwargs) -> discord.File | Non
             await sprites.ensure(sids=[run["party"][run["active"] if idx is None else idx]["sid"]], timeout=1.0)
             png = await asyncio.to_thread(scene.summary, run, sprites.get_sprite, idx)
             name = ui.SUMMARY_FILE
+        elif kind == "intro":
+            png = await asyncio.to_thread(scene.trainer_intro, run)
+            name = ui.SCENE_FILE
         elif kind == "pc":
             page = kwargs.get("page", 0)
             shown = run["box"][page * ui.PC_PAGE:(page + 1) * ui.PC_PAGE] + run["party"]
@@ -228,6 +231,8 @@ def prefetch_next(run: dict):
     evos = [c for m in run["party"] for c, *_ in D.SPECIES[m["sid"]]["evo"]]
     nxt = (run.get("next_e") or {}).get("mon")
     ahead = [nxt["sid"]] if nxt else []
+    if run.get("e"):   # 트레이너 등장 화면 다음에 나올 상대 포켓몬
+        ahead.append(run["e"]["sid"])
     if run.get("mode") == "adventure":   # 이 장소의 야생 포켓몬, 트레이너의 다음 포켓몬
         ahead += [w[0] for w in A.loc(run).get("wild", [])]
         ahead += [m["sid"] for m in (run.get("battle") or {}).get("queue", [])[:1]]
@@ -627,6 +632,9 @@ async def handle_component(interaction: discord.Interaction, custom_id: str):
                 return
 
         # --- 게임 상태를 바꾸는 동작 ---
+        if adv and phase == "battle" and (run.get("battle") or {}).get("intro") and act != "fight":
+            await show(interaction, run, _main(slot, name, run))   # 트레이너 등장 중에는 승부 버튼만
+            return
         stay = None   # 바뀐 뒤 보여줄 메뉴 (없으면 기본 화면)
         loc_before = run.get("loc")
         shop_cat = ui._shop_cat(arg) if act == "buy" and arg in E.ITEMS else None
@@ -646,6 +654,8 @@ async def handle_component(interaction: discord.Interaction, custom_id: str):
                     stay, shop_cat = "mart", ui._mart_cat(arg.rpartition(".")[0])
                 elif act in ("dep", "wd"):
                     stay = "pc"
+            elif adv and act == "fight" and phase == "battle" and (run.get("battle") or {}).get("intro"):
+                run["battle"].pop("intro")   # 트레이너 등장 → 포켓몬 배틀
             elif adv and act == "flee" and phase == "battle":
                 A.flee(run)
             elif act == "quitok":
