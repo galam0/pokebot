@@ -1,7 +1,7 @@
-"""런·트레이너 기록 저장 (Neon Postgres, asyncpg).
+"""게임·트레이너 기록 저장 (Neon Postgres, asyncpg).
 
 - DATABASE_URL이 없으면 메모리에만 저장한다 (로컬 테스트용, 재시작하면 사라짐).
-- 진행 중인 런은 메모리에 캐시하고, 디스코드에 먼저 응답한 뒤 DB에 쓴다.
+- 진행 중인 게임은 메모리에 캐시하고, 디스코드에 먼저 응답한 뒤 DB에 쓴다.
   (Neon 무료 플랜은 5분 쉬면 잠들어서 첫 쿼리가 느릴 수 있는데, 디스코드는 3초 안에 응답해야 해서)
 - Neon '-pooler' 주소(PgBouncer)에서는 prepared statement 캐시를 꺼야 한다.
 """
@@ -17,7 +17,7 @@ import asyncpg
 log = logging.getLogger("pokebot.db")
 
 _pool: asyncpg.Pool | None = None
-_runs: dict[int, dict | None] = {}          # user_id -> 진행 중인 런 (None = 없음 확인됨)
+_runs: dict[int, dict | None] = {}          # user_id -> 진행 중인 게임 (None = 없음 확인됨)
 _memory_trainers: dict[int, dict] = {}       # DB 없을 때만 사용
 _locks: dict[int, asyncio.Lock] = {}
 
@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS trainers (
 
 
 def lock(user_id: int) -> asyncio.Lock:
-    """버튼 연타로 같은 런이 동시에 진행되지 않게 유저마다 잠금"""
+    """버튼 연타로 같은 게임이 동시에 진행되지 않게 유저마다 잠금"""
     return _locks.setdefault(user_id, asyncio.Lock())
 
 
@@ -64,10 +64,10 @@ async def init():
     async with _pool.acquire() as con:
         await con.execute(SCHEMA)
         rows = await con.fetch("SELECT user_id, state FROM runs")
-    # 진행 중인 런을 미리 메모리에 올려두면 버튼을 누를 때 DB를 기다리지 않아요
+    # 진행 중인 게임을 미리 메모리에 올려두면 버튼을 누를 때 DB를 기다리지 않아요
     for r in rows:
         _runs[r["user_id"]] = json.loads(r["state"])
-    log.info("DB 연결 완료 (진행 중인 런 %d개 불러옴)", len(rows))
+    log.info("DB 연결 완료 (진행 중인 게임 %d개 불러옴)", len(rows))
 
 
 async def _retry(fn):
@@ -82,9 +82,9 @@ async def _retry(fn):
             log.warning("DB 연결 재시도: %s", e)
 
 
-# ---------- 런 ----------
+# ---------- 게임 ----------
 async def get_run(user_id: int) -> dict | None:
-    # 시작할 때 진행 중인 런을 모두 불러왔으니, 메모리에 없으면 런이 없는 것 (DB를 기다리지 않음)
+    # 시작할 때 진행 중인 게임을 모두 불러왔으니, 메모리에 없으면 게임이 없는 것 (DB를 기다리지 않음)
     if user_id in _runs or _pool:
         return _runs.get(user_id)
     run = None
@@ -110,7 +110,7 @@ async def save_run(user_id: int, run: dict):
 
 
 async def finish_run(user_id: int, name: str, run: dict, cleared_waves: int, clear: bool):
-    """런이 끝나면 런을 지우고 트레이너 기록을 갱신한다."""
+    """게임이 끝나면 게임을 지우고 트레이너 기록을 갱신한다."""
     _runs[user_id] = None
     starter, final = run["starter"], run["p"]["sid"]
     if not _pool:

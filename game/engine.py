@@ -1,6 +1,6 @@
-"""PokeRogue식 런 배틀 엔진 (디스코드와 무관한 순수 파이썬).
+"""PokeRogue식 게임 배틀 엔진 (디스코드와 무관한 순수 파이썬).
 
-런 상태는 JSON으로 저장할 수 있는 dict 하나예요.
+게임 상태는 JSON으로 저장할 수 있는 dict 하나예요.
 
 run = {
   "wave": 1, "phase": "battle" | "reward" | "over" | "clear",
@@ -179,10 +179,12 @@ def start_wave(run: dict, rng: random.Random) -> list[str]:
     if wave > 1 and (wave - 1) % BIOME_SIZE == 0:
         heal_full(run["p"])
         msgs.append(f"🗺️ 새 지역 **{biome(wave)}**에 도착했다! 포켓몬이 모두 회복됐다.")
-    lv = enemy_level(wave, rng)
-    boss = is_boss_wave(wave)
-    sid = wild_species(wave, lv, rng)
-    run["e"] = new_mon(sid, lv, rng, boss=boss)
+    nxt = run.pop("next_e", None)
+    if nxt and nxt.get("wave") == wave:   # 보상 고르는 동안 미리 정해 둔 상대 (그림을 미리 받아 두려고)
+        run["e"] = nxt["mon"]
+    else:
+        run["e"] = roll_enemy(wave, rng)
+    sid, lv, boss = run["e"]["sid"], run["e"]["lv"], run["e"]["boss"]
     p = run["p"]
     p["stg"] = [0] * 5
     p["rc"] = 0
@@ -191,6 +193,11 @@ def start_wave(run: dict, rng: random.Random) -> list[str]:
     run["phase"] = "battle"
     run["log"] = msgs
     return msgs
+
+
+def roll_enemy(wave: int, rng: random.Random) -> dict:
+    lv = enemy_level(wave, rng)
+    return new_mon(wild_species(wave, lv, rng), lv, rng, boss=is_boss_wave(wave))
 
 
 def heal_full(mon: dict):
@@ -457,6 +464,7 @@ def win(run: dict, rng: random.Random) -> list[str]:
         return msgs
     run["phase"] = "reward"
     run["rewards"] = roll_rewards(run, rng)
+    run["next_e"] = {"wave": run["wave"] + 1, "mon": roll_enemy(run["wave"] + 1, rng)}
     return msgs
 
 
@@ -468,13 +476,13 @@ REWARDS = {
     "fullheal":   {"n": "만병통치제", "d": "상태이상 회복", "w": 0},
     "candy":      {"n": "이상한사탕", "d": "레벨이 1 오른다", "w": 12},
     "candy3":     {"n": "이상한사탕 x3", "d": "레벨이 3 오른다", "w": 2},
-    "hpup":       {"n": "맥스업", "d": "최대 HP +10% (이번 런)", "w": 5},
-    "protein":    {"n": "타우린", "d": "공격 +10% (이번 런)", "w": 5},
-    "iron":       {"n": "사포닌", "d": "방어 +10% (이번 런)", "w": 5},
-    "calcium":    {"n": "리보플라빈", "d": "특공 +10% (이번 런)", "w": 5},
-    "zinc":       {"n": "키토산", "d": "특방 +10% (이번 런)", "w": 5},
-    "carbos":     {"n": "알칼로이드", "d": "스피드 +10% (이번 런)", "w": 5},
-    "expcharm":   {"n": "학습장치", "d": "얻는 경험치 +25% (이번 런)", "w": 4},
+    "hpup":       {"n": "맥스업", "d": "최대 HP +10% (이번 게임)", "w": 5},
+    "protein":    {"n": "타우린", "d": "공격 +10% (이번 게임)", "w": 5},
+    "iron":       {"n": "사포닌", "d": "방어 +10% (이번 게임)", "w": 5},
+    "calcium":    {"n": "리보플라빈", "d": "특공 +10% (이번 게임)", "w": 5},
+    "zinc":       {"n": "키토산", "d": "특방 +10% (이번 게임)", "w": 5},
+    "carbos":     {"n": "알칼로이드", "d": "스피드 +10% (이번 게임)", "w": 5},
+    "expcharm":   {"n": "학습장치", "d": "얻는 경험치 +25% (이번 게임)", "w": 4},
 }
 VITAMIN = {"hpup": 0, "protein": 1, "iron": 2, "calcium": 3, "zinc": 4, "carbos": 5}
 MAX_VITAMIN = 10

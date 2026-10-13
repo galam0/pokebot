@@ -1,7 +1,7 @@
 """디스코드 화면(임베드·버튼) 만들기.
 
-버튼 custom_id 형식: pr:<유저ID>:<런 버전>:<동작>[:<값>]
-- 유저ID로 본인만 누를 수 있게 하고, 런 버전으로 지난 화면의 버튼을 막는다.
+버튼 custom_id 형식: pr:<유저ID>:<게임 버전>:<동작>[:<값>]
+- 유저ID로 본인만 누를 수 있게 하고, 게임 버전으로 지난 화면의 버튼을 막는다.
 - View를 메모리에 등록하지 않고 bot.on_interaction 에서 직접 처리한다.
   → 봇이 재시작해도, 몇 시간이 지나도 버튼이 계속 동작한다.
 """
@@ -73,7 +73,7 @@ def region_screen(uid: int) -> tuple[str, list[discord.Embed], discord.ui.View]:
         description=("함께 떠날 스타팅 포켓몬을 고르세요.\n\n"
                      f"• 야생 포켓몬을 이기며 웨이브를 하나씩 넘어가요. **{E.FINAL_WAVE}웨이브**가 마지막이에요.\n"
                      f"• {E.BIOME_SIZE}웨이브마다 👑 보스가 나오고, 보스를 넘기면 새 지역에서 회복돼요.\n"
-                     "• 이길 때마다 보상을 하나 골라요. 쓰러지면 런이 끝나요."),
+                     "• 이길 때마다 보상을 하나 골라요. 쓰러지면 게임이 끝나요."),
         color=discord.Color.blurple(),
     )
     return "", [embed], _frozen(view)
@@ -102,7 +102,12 @@ def starter_screen(uid: int, region: str) -> tuple[str, list[discord.Embed], dis
 
 
 # ---------- 배틀 화면 ----------
-def battle_screen(uid: int, trainer: str, run: dict) -> tuple[discord.Embed, discord.ui.View]:
+SCENE_FILE = "scene.png"
+SUMMARY_FILE = "summary.png"
+
+
+def battle_screen(uid: int, trainer: str, run: dict, image: bool = False) -> tuple[discord.Embed, discord.ui.View]:
+    """image=True면 HP·보상은 그림(scene.png)이 보여주고, 글로는 턴 기록과 버튼만 둔다."""
     p, e, wave, phase, ver = run["p"], run["e"], run["wave"], run["phase"], run.get("ver", 0)
     boss = E.is_boss_wave(wave)
     title = f"웨이브 {wave}/{E.FINAL_WAVE} · {E.biome(wave)}" + (" · 👑 보스전" if boss else "")
@@ -111,15 +116,18 @@ def battle_screen(uid: int, trainer: str, run: dict) -> tuple[discord.Embed, dis
     desc = josa("\n".join(log[-16:])) or "​"
     embed = discord.Embed(title=title, description=desc[:4000], color=color)
 
-    if e:
-        embed.add_field(name=f"상대 · {D.name(e['sid'])} Lv.{e['lv']}" + (" 👑" if e.get("boss") else ""),
-                        value=f"{mon_head(e)}\n{hp_line(e)}", inline=False)
-    embed.add_field(name=f"나 · {D.name(p['sid'])} Lv.{p['lv']}",
-                    value=f"{mon_head(p)}\n{hp_line(p)}\n{exp_line(p)}", inline=False)
-    if e and phase == "battle":
-        embed.set_thumbnail(url=D.artwork(e["sid"]))
+    if image:
+        embed.set_image(url=f"attachment://{SCENE_FILE}")
     else:
-        embed.set_thumbnail(url=D.artwork(p["sid"]))
+        if e:
+            embed.add_field(name=f"상대 · {D.name(e['sid'])} Lv.{e['lv']}" + (" 👑" if e.get("boss") else ""),
+                            value=f"{mon_head(e)}\n{hp_line(e)}", inline=False)
+        embed.add_field(name=f"나 · {D.name(p['sid'])} Lv.{p['lv']}",
+                        value=f"{mon_head(p)}\n{hp_line(p)}\n{exp_line(p)}", inline=False)
+        if e and phase == "battle":
+            embed.set_thumbnail(url=D.artwork(e["sid"]))
+        else:
+            embed.set_thumbnail(url=D.artwork(p["sid"]))
     embed.set_author(name=f"{trainer} 트레이너", icon_url=D.sprite(p["sid"]))
 
     view = discord.ui.View(timeout=None)
@@ -153,15 +161,16 @@ def battle_screen(uid: int, trainer: str, run: dict) -> tuple[discord.Embed, dis
                                         custom_id=cid(uid, ver, "skip")))
         view.add_item(discord.ui.Button(label="내 포켓몬", emoji="📋", style=discord.ButtonStyle.secondary,
                                         custom_id=cid(uid, ver, "info"), row=1))
-        embed.add_field(name="🎁 보상을 하나 고르세요", value="\n".join(lines) or "-", inline=False)
+        if not image:
+            embed.add_field(name="🎁 보상을 하나 고르세요", value="\n".join(lines) or "-", inline=False)
     else:
         cleared = wave if phase == "clear" else wave - 1
         embed.add_field(
-            name="🏆 런 클리어!" if phase == "clear" else "런 종료",
+            name="🏆 게임 클리어!" if phase == "clear" else "게임 종료",
             value=(f"**{cleared}웨이브** 돌파 · 스타팅 {D.name(run['starter'])} → {D.name(p['sid'])} Lv.{p['lv']}\n"
                    f"한 방 최고 데미지 {run.get('best_hit', 0)}"),
             inline=False)
-        view.add_item(discord.ui.Button(label="새 런 시작", emoji="🔁", style=discord.ButtonStyle.primary,
+        view.add_item(discord.ui.Button(label="새 게임 시작", emoji="🔁", style=discord.ButtonStyle.primary,
                                         custom_id=cid(uid, ver, "new")))
     return embed, _frozen(view)
 
@@ -176,14 +185,16 @@ def quit_confirm(uid: int, ver: int) -> discord.ui.View:
 
 
 # ---------- 상세 정보 ----------
-def mon_detail(trainer: str, run: dict) -> discord.Embed:
+def mon_detail(trainer: str, run: dict, image: bool = False) -> discord.Embed:
+    """image=True면 능력치·HP는 그림(summary.png)이 보여주고, 글로는 기술 설명과 앞으로를 둔다."""
     p = run["p"]
     e = discord.Embed(title=f"{D.name(p['sid'])} Lv.{p['lv']}",
-                      description=f"{mon_head(p)}\n{hp_line(p)}\n{exp_line(p)}",
+                      description=None if image else f"{mon_head(p)}\n{hp_line(p)}\n{exp_line(p)}",
                       color=TYPE_COLOR.get(D.types(p["sid"])[0], 0x5865F2))
-    stats = E.stats_line(p)
-    e.add_field(name="능력치", value="\n".join(
-        f"{n} **{v}**" + (f" (+{p['vit'][i] * 10}%)" if p["vit"][i] else "") for i, (n, v) in enumerate(stats)))
+    if not image:
+        stats = E.stats_line(p)
+        e.add_field(name="능력치", value="\n".join(
+            f"{n} **{v}**" + (f" (+{p['vit'][i] * 10}%)" if p["vit"][i] else "") for i, (n, v) in enumerate(stats)))
     moves = []
     for mid in p["moves"]:
         m = D.MOVES[mid]
@@ -213,7 +224,10 @@ def mon_detail(trainer: str, run: dict) -> discord.Embed:
         tips.append(f"학습장치: 경험치 {int(run['exp_mult'] * 100)}%")
     if tips:
         e.add_field(name="앞으로", value="\n".join(tips), inline=False)
-    e.set_thumbnail(url=D.artwork(p["sid"]))
+    if image:
+        e.set_image(url=f"attachment://{SUMMARY_FILE}")
+    else:
+        e.set_thumbnail(url=D.artwork(p["sid"]))
     e.set_footer(text=f"{trainer} 트레이너 · 웨이브 {run['wave']} · 스타팅 {D.name(run['starter'])}")
     return e
 
@@ -224,10 +238,10 @@ def records(trainer: dict | None, top: list[dict], me: int) -> discord.Embed:
         best = (f"{D.name(trainer['best_starter'])} → {D.name(trainer['best_final'])}"
                 if trainer.get("best_starter") else "-")
         e.add_field(name="내 기록", value=(f"최고 **{trainer['best_wave']}웨이브** ({best})\n"
-                                          f"런 {trainer['runs']}번 · 클리어 {trainer['clears']}번 · 누적 {trainer['total_waves']}웨이브"),
+                                          f"게임 {trainer['runs']}번 · 클리어 {trainer['clears']}번 · 누적 {trainer['total_waves']}웨이브"),
                     inline=False)
     else:
-        e.add_field(name="내 기록", value="아직 끝낸 런이 없어요.", inline=False)
+        e.add_field(name="내 기록", value="아직 끝낸 게임이 없어요.", inline=False)
     medals = ["🥇", "🥈", "🥉"]
     lines = []
     for i, t in enumerate(top):

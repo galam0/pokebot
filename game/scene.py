@@ -293,6 +293,9 @@ def battle(run: dict, get_sprite: SpriteGetter | None = None, message: list[str]
     # 나 (왼쪽 아래, 뒷모습)
     _platform(d, 78, 146, 60, 14, biome)
     ps = _sprite(get_sprite, p["sid"], True)
+    if p["hp"] <= 0:
+        ps = ps.convert("LA").convert("RGBA")   # 쓰러지면 흑백
+        ps.putalpha(ps.getchannel("A").point(lambda a: a // 2))
     if ps.height < 80:   # 뒷모습은 조금 크게
         ps = ps.resize((int(ps.width * 1.5), int(ps.height * 1.5)), Image.NEAREST)
     im.paste(ps, (78 - ps.width // 2, 146 - ps.height + 6), ps)
@@ -344,7 +347,7 @@ def _pick_lines(run: dict) -> list[str]:
     if run["phase"] == "reward":
         return (lines[-1:] if lines else []) + ["보상을 하나 고르세요!"]
     if run["phase"] == "over":
-        return lines[-1:] + [f"{run['wave'] - 1}웨이브 돌파! 런이 끝났다."]
+        return lines[-1:] + [f"{run['wave'] - 1}웨이브 돌파! 게임이 끝났다."]
     if run["phase"] == "clear":
         return lines[-1:] + ["축하합니다! 모든 웨이브를 클리어했다!"]
     if run["phase"] == "battle" and len(lines) <= 2 and not any("데미지" in s for s in lines):
