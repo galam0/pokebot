@@ -362,8 +362,9 @@ async def show_dex(interaction: discord.Interaction, user, gen: int, page: int, 
     file = None
     try:
         sids = [s for s in S.dex_page_sids(gen, page) if s in dex]
-        await sprites.ensure(sids=sids, timeout=1.5)
-        png = await asyncio.to_thread(S.dex_page, gen, page, dex, sprites.get_sprite, user.display_name)
+        await sprites.ensure(icons=sids, timeout=1.5)
+        png = await asyncio.to_thread(S.dex_page, gen, page, dex, sprites.get_sprite, user.display_name,
+                                      sprites.get_icon)
         file = discord.File(io.BytesIO(png), filename=ui.DEX_FILE)
     except Exception as ex:
         log.warning("도감 그림 실패: %s", short_error(ex))
@@ -374,7 +375,7 @@ async def show_dex(interaction: discord.Interaction, user, gen: int, page: int, 
     else:
         await interaction.response.edit_message(embeds=[embed], view=view, attachments=[file] if file else [])
     nxt = [s for s in S.dex_page_sids(gen, page + 1) if s in dex] if page + 1 < S.dex_pages(gen) else []
-    sprites.prefetch(sids=nxt)
+    sprites.prefetch(icons=nxt)
 
 
 async def handle_dex(interaction: discord.Interaction, custom_id: str):

@@ -65,6 +65,7 @@ def _canvas(color=(0, 0, 0)) -> tuple[Image.Image, ImageDraw.ImageDraw]:
     im = Image.new("RGB", (W, H), color)
     d = ImageDraw.Draw(im)
     d.texts = []   # 글자는 모아 뒀다가 _finish에서 큰 그림에 쓴다
+    d.bigs = []    # 1·2배로 붙일 도트 그림 (작은 캔버스의 3배와 안 맞으니 큰 그림에 바로)
     return im, d
 
 
@@ -73,12 +74,15 @@ def _layer() -> tuple[Image.Image, ImageDraw.ImageDraw]:
     im = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     d = ImageDraw.Draw(im)
     d.texts = []
+    d.bigs = []
     return im, d
 
 
 def _enlarge(im: Image.Image, d: ImageDraw.ImageDraw) -> Image.Image:
     """3배로 키우고 모아 둔 글자를 쓴다"""
     big = im.resize((W * SCALE, H * SCALE), Image.NEAREST)
+    for img, xy in getattr(d, "bigs", []):
+        big.paste(img, xy, img)
     bd = ImageDraw.Draw(big)
     for (x, y), s, font, fill, outline in d.texts:
         bd.text((x * SCALE, y * SCALE + 1), s, font=font, fill=fill,
@@ -286,12 +290,17 @@ def _sprite(get_sprite: SpriteGetter | None, sid: int, back: bool) -> Image.Imag
     return img.crop(bbox) if bbox else img
 
 
-def _fit(img: Image.Image, w: int, h: int) -> Image.Image:
-    """칸에 맞추기: 들어가면 그대로, 크면 부드럽게 줄인다 (도트를 듬성듬성 빼서 깨지지 않게)"""
-    if img.width <= w and img.height <= h:
-        return img
-    k = min(w / img.width, h / img.height)
-    return img.resize((max(1, round(img.width * k)), max(1, round(img.height * k))), Image.LANCZOS)
+def _put(im: Image.Image, d, img: Image.Image, cx: int, foot: int, w: int, h: int, kmax: int = SCALE):
+    """도트 그림을 칸(w x h, 작은 캔버스 기준)에 맞는 가장 큰 정수배로 붙인다. 발(아래 가운데)이 (cx, foot).
+    큰 그림 기준 1·2·3·…배라 흐려지거나 도트가 빠지지 않는다. 3의 배수면 작은 캔버스에, 아니면 큰 그림에 바로."""
+    k = next((k for k in range(kmax, 0, -1) if img.width * k <= w * SCALE and img.height * k <= h * SCALE), 1)
+    if k % SCALE == 0:
+        m = k // SCALE
+        img = img.resize((img.width * m, img.height * m), Image.NEAREST) if m > 1 else img
+        im.paste(img, (cx - img.width // 2, foot - img.height), img)
+        return
+    big = img.resize((img.width * k, img.height * k), Image.NEAREST)
+    d.bigs.append((big, (cx * SCALE - big.width // 2, foot * SCALE - big.height)))
 
 
 def _background(d, biome: str):
@@ -611,10 +620,7 @@ def summary(run: dict, get_sprite: SpriteGetter | None = None, index: int | None
     for y in range(23, 133, 6):
         d.line((7, y, 109, y), fill=(236, 236, 228))
     sp = _sprite(get_sprite, p["sid"], False)
-    if sp.width * 2 <= 96 and sp.height * 2 <= 96:   # 작은 포켓몬은 정수배(2배)로
-        sp = sp.resize((sp.width * 2, sp.height * 2), Image.NEAREST)
-    sp = _fit(sp, 96, 96)
-    im.paste(sp, (58 - sp.width // 2, 116 - sp.height), sp)
+    _put(im, d, sp, 58, 116, 100, 92, kmax=2 * SCALE)
     _text(d, (12, 28), f"Lv.{p['lv']}", font=BOLD)
     x = 12
     for t in D.types(p["sid"]):
@@ -774,10 +780,9 @@ def _party_strip(im, d, run: dict, get_sprite, x0: int, y0: int):
         if i == run["active"]:
             d.rounded_rectangle((sx + 1, y0 + 3, sx + slot - 1, y0 + 57), radius=3, fill=(255, 244, 208), outline=(216, 168, 72))
         sp = _sprite(get_sprite, m["sid"], False)
-        sp = _fit(sp, 32, 32)
         if m["hp"] <= 0:
             sp = sp.convert("LA").convert("RGBA")
-        im.paste(sp, (sx + slot // 2 - sp.width // 2, y0 + 36 - sp.height), sp)
+        _put(im, d, sp, sx + slot // 2, y0 + 36, slot - 6, 32)
         lv = f"Lv.{m['lv']}"
         _text(d, (sx + slot // 2 - _tw(lv) // 2, y0 + 37), lv)
         _mini_gauge(d, sx + 5, y0 + 50, slot - 10, m["hp"] / E.max_hp(m))
@@ -982,7 +987,7 @@ IconGetter = Callable[[int], Image.Image | None]
 PC_COLS, PC_ROWS = 5, 5
 
 
-def _icon(get_icon: IconGetter | None, get_sprite: SpriteGetter | None, sid: int, w: int, h: int) -> Image.Image:
+def _icon(get_icon: IconGetter | None, get_sprite: SpriteGetter | None, sid: int) -> Image.Image:
     img = None
     if get_icon:
         try:
@@ -995,7 +1000,7 @@ def _icon(get_icon: IconGetter | None, get_sprite: SpriteGetter | None, sid: int
         img = img.crop(bbox) if bbox else img
     else:
         img = _sprite(get_sprite, sid, False)
-    return _fit(img, w, h)
+    return img
 
 
 def pc(run: dict, page: int = 0, get_icon: IconGetter | None = None, get_sprite: SpriteGetter | None = None,
@@ -1021,8 +1026,7 @@ def pc(run: dict, page: int = 0, get_icon: IconGetter | None = None, get_sprite:
     for i, m in enumerate(chunk):
         r, c = divmod(i, PC_COLS)
         x, y = bx + 6 + c * sw, by + 30 + r * sh
-        ic = _icon(get_icon, get_sprite, m["sid"], sw, sh + 6)
-        im.paste(ic, (x + sw // 2 - ic.width // 2, y + sh - ic.height), ic)
+        _put(im, d, _icon(get_icon, get_sprite, m["sid"]), x + sw // 2, y + sh, sw, sh + 8)
     if not chunk:
         _text(d, (bx + 80 - _tw("비어 있어요", BOLD) // 2, by + 80), "비어 있어요", font=BOLD, fill=(40, 88, 40))
     # 왼쪽: 지금 파티 (2줄 x 3)
@@ -1035,8 +1039,7 @@ def pc(run: dict, page: int = 0, get_icon: IconGetter | None = None, get_sprite:
                             (216, 128, 112), outline=(120, 40, 40))
         if i < len(run["party"]):
             m = run["party"][i]
-            ic = _icon(get_icon, get_sprite, m["sid"], 32, 28)
-            im.paste(ic, (x + 18 - ic.width // 2, y + 30 - ic.height), ic)
+            _put(im, d, _icon(get_icon, get_sprite, m["sid"]), x + 18, y + 32, 34, 30)
             lv = f"Lv.{m['lv']}"
             _text(d, (x + 58 - _tw(lv), y + 26), lv)
     # 제목
@@ -1246,8 +1249,7 @@ def menu(info: dict, get_sprite: SpriteGetter | None = None) -> bytes:
         cx, cy = 196 + (i % 3) * 45, 56 + (i // 3) * 42
         d.ellipse((cx - 16, cy + 26, cx + 16, cy + 32), fill=(200, 212, 228))
         sp = _sprite(get_sprite, sid, False)
-        sp = _fit(sp, 40, 40)
-        im.paste(sp, (cx - sp.width // 2, cy + 30 - sp.height), sp)
+        _put(im, d, sp, cx, cy + 30, 42, 31)
         if lv:
             t = f"Lv{lv}"
             _text(d, (cx - _tw(t) // 2, cy + 31), t, fill=INK)
@@ -1453,7 +1455,7 @@ def dex_page_sids(gen: int, page: int) -> list[int]:
 
 
 def dex_page(gen: int, page: int, caught: dict[int, int], get_sprite: SpriteGetter | None = None,
-             trainer: str = "") -> bytes:
+             trainer: str = "", get_icon: "IconGetter | None" = None) -> bytes:
     """세대별 도감 한 쪽 (6x4). 잡은 포켓몬은 그림과 이름, 못 잡은 포켓몬은 ?"""
     region, a, b = GENS[gen - 1]
     im, d = _canvas((200, 48, 48))
@@ -1484,9 +1486,8 @@ def dex_page(gen: int, page: int, caught: dict[int, int], get_sprite: SpriteGett
         num = f"{sid:03d}" if sid < 1000 else str(sid)
         _text(d, (cx0 + 3, cy0 + 1), num, fill=(72, 96, 72) if own else (112, 128, 112))
         if own:
-            sp = _sprite(get_sprite, sid, False)
-            sp = _fit(sp, 30, 30)
-            im.paste(sp, (cx0 + cw // 2 - sp.width // 2, cy0 + ch - 11 - sp.height), sp)
+            sp = _icon(get_icon, get_sprite, sid)   # 작은 칸에는 메뉴 아이콘 (2배로 선명하게)
+            _put(im, d, sp, cx0 + cw // 2, cy0 + ch - 11, cw - 4, ch - 12)
             name = D.name(sid)
             while _tw(name, SMALL) > cw - 4 and len(name) > 1:
                 name = name[:-1]
@@ -1526,10 +1527,9 @@ def party(run: dict, get_sprite: SpriteGetter | None = None, title: str = "파�
         d.rounded_rectangle(box, radius=5, fill=fill, outline=(216, 168, 72) if i == run["active"] else PANEL_EDGE, width=2 if i == run["active"] else 1)
         _text(d, (x0 + 5, y0 + 3), f"{i + 1}", fill=(160, 120, 40))
         sp = _sprite(get_sprite, m["sid"], False)
-        sp = _fit(sp, 44, 44)
         if fainted or dim:
             sp = sp.convert("LA").convert("RGBA")
-        im.paste(sp, (x0 + 30 - sp.width // 2, y0 + 49 - sp.height), sp)
+        _put(im, d, sp, x0 + 30, y0 + 49, 48, 44)
         name = D.name(m["sid"])
         _text(d, (x0 + 56, y0 + 4), name, font=BOLD, fill=(96, 96, 104) if dim else INK)
         lv = f"Lv.{m['lv']}"
