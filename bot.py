@@ -64,10 +64,15 @@ def _bg(coro, what: str):
 
 
 # ---------- Health check (Render 웹 서비스는 포트를 열어두어야 해요) ----------
+_health_started = False
+
+
 async def start_health_server():
+    global _health_started
     port = os.getenv("PORT")
-    if not port:
+    if not port or _health_started:
         return
+    _health_started = True
     app = web.Application()
 
     async def ok(_request):
@@ -686,7 +691,27 @@ async def records(interaction: discord.Interaction):
     await send_records(interaction)
 
 
+async def main():
+    """Render 무료 플랜의 공유 IP가 디스코드에 잠깐 막히면(429) 로그인이 실패해요.
+    그때 바로 꺼지지 않고 포트를 연 채로 기다렸다가 다시 로그인해요."""
+    discord.utils.setup_logging(root=True)
+    await start_health_server()
+    delay = 30
+    async with bot:
+        while True:
+            try:
+                await bot.login(TOKEN)
+                break
+            except discord.HTTPException as e:
+                if e.status != 429:
+                    raise
+                log.warning("디스코드 로그인이 잠시 막혔어요 (429). %d초 뒤에 다시 시도해요.", delay)
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, 600)
+        await bot.connect()
+
+
 if __name__ == "__main__":
     if not TOKEN:
         raise SystemExit("DISCORD_TOKEN 환경변수를 설정해 주세요 (.env 파일 참고)")
-    bot.run(TOKEN, root_logger=True)
+    asyncio.run(main())
