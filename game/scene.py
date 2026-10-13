@@ -6,6 +6,7 @@
 """
 
 import io
+import json
 import math
 from pathlib import Path
 from typing import Callable
@@ -285,6 +286,14 @@ def _sprite(get_sprite: SpriteGetter | None, sid: int, back: bool) -> Image.Imag
     return img.crop(bbox) if bbox else img
 
 
+def _fit(img: Image.Image, w: int, h: int) -> Image.Image:
+    """칸에 맞추기: 들어가면 그대로, 크면 부드럽게 줄인다 (도트를 듬성듬성 빼서 깨지지 않게)"""
+    if img.width <= w and img.height <= h:
+        return img
+    k = min(w / img.width, h / img.height)
+    return img.resize((max(1, round(img.width * k)), max(1, round(img.height * k))), Image.LANCZOS)
+
+
 def _background(d, biome: str):
     top, bottom, ground, mark = BIOME_RGB.get(biome, BIOME_RGB["풀숲"])
     horizon = 92
@@ -422,8 +431,8 @@ def _actor_big(get_sprite, sid: int, back: bool, fainted: bool) -> Image.Image:
     img = _sprite(get_sprite, sid, back)
     if fainted:
         img = _fainted(img)
-    if back and img.height < 80:
-        img = img.resize((int(img.width * 1.5), int(img.height * 1.5)), Image.NEAREST)
+    if back and img.height * 2 <= 120:   # 작은 뒷모습은 2배 (정수배라 도트가 고르다)
+        img = img.resize((img.width * 2, img.height * 2), Image.NEAREST)
     return img.resize((img.width * SCALE, img.height * SCALE), Image.NEAREST)
 
 
@@ -463,12 +472,8 @@ def _at(frames: list[tuple[Image.Image, int]], t: int) -> Image.Image:
 
 
 def _breathe(img: Image.Image, phase: float) -> tuple[Image.Image, int]:
-    """멈춘 그림에 숨쉬기 (살짝 늘었다 줄고 통통 뜀). (그림, 위로 뜬 높이)"""
-    s = math.sin(phase * 2 * math.pi)
-    w = max(1, round(img.width * (1 - 0.02 * s)))
-    h = max(1, round(img.height * (1 + 0.04 * s)))
-    lift = round(4 * max(0.0, math.sin(phase * 2 * math.pi + 0.6)))
-    return img.resize((w, h), Image.NEAREST), lift
+    """멈춘 그림을 통통 뛰게 (그림 크기는 그대로라 도트가 깨지지 않는다). (그림, 위로 뜬 높이: 큰 그림 픽셀)"""
+    return img, round(9 * max(0.0, math.sin(phase * 2 * math.pi)))
 
 
 def battle_gif(run: dict, get_sprite: SpriteGetter | None = None, get_anim: AnimGetter | None = None,
@@ -606,9 +611,9 @@ def summary(run: dict, get_sprite: SpriteGetter | None = None, index: int | None
     for y in range(23, 133, 6):
         d.line((7, y, 109, y), fill=(236, 236, 228))
     sp = _sprite(get_sprite, p["sid"], False)
-    if sp.width <= 64:
+    if sp.width * 2 <= 96 and sp.height * 2 <= 96:   # 작은 포켓몬은 정수배(2배)로
         sp = sp.resize((sp.width * 2, sp.height * 2), Image.NEAREST)
-    sp.thumbnail((96, 96), Image.NEAREST)
+    sp = _fit(sp, 96, 96)
     im.paste(sp, (58 - sp.width // 2, 116 - sp.height), sp)
     _text(d, (12, 28), f"Lv.{p['lv']}", font=BOLD)
     x = 12
@@ -769,7 +774,7 @@ def _party_strip(im, d, run: dict, get_sprite, x0: int, y0: int):
         if i == run["active"]:
             d.rounded_rectangle((sx + 1, y0 + 3, sx + slot - 1, y0 + 57), radius=3, fill=(255, 244, 208), outline=(216, 168, 72))
         sp = _sprite(get_sprite, m["sid"], False)
-        sp.thumbnail((32, 32), Image.NEAREST)
+        sp = _fit(sp, 32, 32)
         if m["hp"] <= 0:
             sp = sp.convert("LA").convert("RGBA")
         im.paste(sp, (sx + slot // 2 - sp.width // 2, y0 + 36 - sp.height), sp)
@@ -869,7 +874,201 @@ def _hero(get_trainer: TrainerGetter | None, key: str) -> Image.Image | None:
     return img.crop(bbox) if bbox else img
 
 
-def field(run: dict, get_sprite: SpriteGetter | None = None, get_trainer: TrainerGetter | None = None) -> bytes:
+# ---------- 모험: 파이어레드 맵 장면 ----------
+_ASSETS = Path(__file__).resolve().parent.parent / "assets"
+_places: dict | None = None
+_img_cache: dict[str, Image.Image | None] = {}
+FEMALE = {"leaf", "lyra", "may", "dawn", "hilda", "rosa", "serena", "selene", "gloria", "juliana"}
+OVERWORLD = {"red": "red_normal", "leaf": "green_normal", "brendan": "brendan", "may": "may"}
+DIALOG_BG, DIALOG_EDGE, DIALOG_INNER = (248, 248, 248), (88, 96, 112), (160, 200, 216)
+
+
+def _asset(rel: str) -> Image.Image | None:
+    if rel not in _img_cache:
+        f = _ASSETS / rel
+        _img_cache[rel] = Image.open(f).convert("RGBA") if f.exists() else None
+    return _img_cache[rel]
+
+
+def place_data(loc_key: str, kind: str = "field") -> dict | None:
+    """장소의 맵 장면 정보 (assets/maps/places.json, tools/build_places.py로 만든다). 맵 그림이 없으면 None"""
+    global _places
+    if _places is None:
+        f = _ASSETS / "maps" / "places.json"
+        _places = json.loads(f.read_text()) if f.exists() else {}
+    sc = (_places.get(loc_key) or {}).get(kind)
+    if not sc or _asset(f"maps/{sc['map']}.png") is None:
+        return None
+    return sc
+
+
+def _walker(name: str, face: str) -> Image.Image | None:
+    """걷는 그림 세 칸 [아래, 위, 왼쪽] 중 하나 (오른쪽은 왼쪽을 뒤집는다)"""
+    strip = _asset(f"people/{name}.png")
+    if strip is None:
+        return None
+    fw = strip.width // 3
+    i = {"down": 0, "up": 1, "left": 2, "right": 2}[face]
+    fr = strip.crop((i * fw, 0, i * fw + fw, strip.height))
+    return fr.transpose(Image.FLIP_LEFT_RIGHT) if face == "right" else fr
+
+
+def _overworld(hero: str) -> str:
+    """주인공의 필드 그림 (파이어레드·에메랄드에 있는 주인공 말고는 남녀에 맞춰 레드·리프로)"""
+    return OVERWORLD.get(hero) or ("green_normal" if hero in FEMALE else "red_normal")
+
+
+def _dialog(d, lines: list[tuple[str, tuple]]):
+    """파이어레드풍 하얀 대화창 (3줄, 많으면 두 칸으로)"""
+    d.rounded_rectangle((2, 146, W - 3, H - 3), radius=4, fill=DIALOG_BG, outline=DIALOG_EDGE, width=1)
+    d.rounded_rectangle((4, 148, W - 5, H - 5), radius=3, outline=DIALOG_INNER, width=1)
+    cols = 1 if len(lines) <= 3 else 2
+    for i, (s, col) in enumerate(lines[:3 * cols]):
+        c, r = divmod(i, 3)
+        x = 12 + c * (W // 2 - 4)
+        s = josa(s)
+        while _tw(s) > (W - 28) // cols and len(s) > 2:
+            s = s[:-1]
+        _text(d, (x, 152 + r * 12), s, fill=col)
+
+
+def map_scene(run: dict, kind: str = "field", lines: list[tuple[str, tuple]] | None = None) -> bytes | None:
+    """파이어레드 원본 맵 위에 주인공·사람들을 세우고, 장소 팻말과 대화창을 얹는다. 맵이 없으면 None"""
+    sc = place_data(run["loc"], kind)
+    if sc is None:
+        return None
+    full = _asset(f"maps/{sc['map']}.png").copy()
+    for name, x, y, face in sc["npcs"]:   # 사람들 (발이 칸 아래에 오게)
+        img = _walker(name, face)
+        if img:
+            full.alpha_composite(img, (x * 16, y * 16 + 16 - img.height))
+    px, py, face = sc["player"]
+    me = _walker(_overworld(HR.of(run)), face)
+    if me:
+        full.alpha_composite(me, (px * 16, py * 16 + 16 - me.height))
+    # 카메라: 주인공이 화면 가운데보다 조금 위에 (아래는 대화창)
+    cx, cy = px * 16 + 8, py * 16 + 8 + 22
+    x0 = (full.width - W) // 2 if full.width <= W else max(0, min(full.width - W, cx - W // 2))
+    y0 = (full.height - H) // 2 if full.height <= H else max(0, min(full.height - H, cy - H // 2))
+    im, d = _canvas()
+    im.paste(full.crop((x0, y0, x0 + W, y0 + H)).convert("RGB"), (0, 0))
+    if full.width < W or full.height < H:   # 작은 방: 바깥은 까맣게
+        bx, by = max(0, -x0), max(0, -y0)
+        mask = Image.new("L", (W, H), 255)
+        ImageDraw.Draw(mask).rectangle((bx, by, bx + full.width - 1, by + full.height - 1), fill=0)
+        im.paste((0, 0, 0), (0, 0), mask)
+    # 장소 팻말
+    L = A.loc(run)
+    title = {"center": f"{L['n']} 포켓몬센터", "mart": f"{L['n']} " + ("백화점" if L.get("dept") else "프렌들리숍"),
+             "gym": f"{L['n']} 체육관", "home": "우리 집"}.get(kind, L["n"])
+    tw = _tw(title, BOLD)
+    d.rounded_rectangle((4, 4, 16 + tw, 22), radius=3, fill=(248, 248, 240), outline=(72, 88, 120), width=1)
+    d.rectangle((6, 6, 8, 20), fill=(232, 88, 72))
+    _text(d, (11, 6), title, font=BOLD)
+    # 오른쪽 위: 돈 · 배지
+    region = A.region_of(run["loc"])
+    info = f"₽{run.get('money', 0):,}"
+    badges = f"배지 {len(A.region_badges(run, region))}/8"
+    bw = max(_tw(info), _tw(badges, SMALL)) + 12
+    d.rounded_rectangle((W - 4 - bw, 4, W - 4, 32), radius=3, fill=(248, 248, 240), outline=(72, 88, 120), width=1)
+    _text(d, (W - 10 - _tw(info), 7), info)
+    _text(d, (W - 10 - _tw(badges, SMALL), 18), badges, font=SMALL, fill=(96, 96, 112))
+    _dialog(d, lines if lines is not None else (_facility_lines(run) or [("조용한 곳이다.", (88, 88, 104))]))
+    return _finish(im, d)
+
+
+# ---------- PC 박스 ----------
+IconGetter = Callable[[int], Image.Image | None]
+PC_COLS, PC_ROWS = 5, 5
+
+
+def _icon(get_icon: IconGetter | None, get_sprite: SpriteGetter | None, sid: int, w: int, h: int) -> Image.Image:
+    img = None
+    if get_icon:
+        try:
+            img = get_icon(sid)
+        except Exception:
+            img = None
+    if img is not None:
+        img = img.convert("RGBA")
+        bbox = img.getbbox()
+        img = img.crop(bbox) if bbox else img
+    else:
+        img = _sprite(get_sprite, sid, False)
+    return _fit(img, w, h)
+
+
+def pc(run: dict, page: int = 0, get_icon: IconGetter | None = None, get_sprite: SpriteGetter | None = None,
+       per_page: int = 25) -> bytes:
+    """PC 박스: 파이어레드 숲 배경지 위에 박스 포켓몬, 왼쪽에 지금 파티"""
+    im, d = _canvas((88, 136, 200))
+    for y in range(0, H, 8):   # 파란 줄무늬 바탕 (박스 화면 뒤쪽)
+        d.rectangle((0, y, W, y + 3), fill=(104, 152, 216))
+    box = run.get("box", [])
+    pages = max(1, (len(box) + per_page - 1) // per_page)
+    page = max(0, min(page, pages - 1))
+    chunk = box[page * per_page:(page + 1) * per_page]
+    # 오른쪽: 박스 (배경지 160x144)
+    bx, by = 152, 26
+    wall = _asset("pc/forest.png")
+    if wall:
+        im.paste(wall, (bx, by), wall)
+    else:
+        d.rounded_rectangle((bx, by, bx + 159, by + 143), radius=4, fill=(136, 200, 96))
+    label = f"박스 {page + 1}" + (f"/{pages}" if pages > 1 else "") + f" · {len(box)}마리"
+    _text(d, (bx + 80 - _tw(label, BOLD) // 2, by + 5), label, font=BOLD, fill=(255, 255, 255), shadow=(40, 88, 40))
+    sw, sh = 30, 22
+    for i, m in enumerate(chunk):
+        r, c = divmod(i, PC_COLS)
+        x, y = bx + 6 + c * sw, by + 30 + r * sh
+        ic = _icon(get_icon, get_sprite, m["sid"], sw, sh + 6)
+        im.paste(ic, (x + sw // 2 - ic.width // 2, y + sh - ic.height), ic)
+    if not chunk:
+        _text(d, (bx + 80 - _tw("비어 있어요", BOLD) // 2, by + 80), "비어 있어요", font=BOLD, fill=(40, 88, 40))
+    # 왼쪽: 지금 파티 (2줄 x 3)
+    d.rounded_rectangle((6, 26, 144, 170), radius=6, fill=(232, 96, 80), outline=(120, 40, 40), width=2)
+    _text(d, (14, 30), "지금 파티", font=BOLD, fill=(255, 255, 255), shadow=(120, 40, 40))
+    for i in range(E.MAX_PARTY):
+        r, c = divmod(i, 2)
+        x, y = 12 + c * 66, 46 + r * 40
+        d.rounded_rectangle((x, y, x + 60, y + 36), radius=4, fill=(248, 232, 216) if i < len(run["party"]) else
+                            (216, 128, 112), outline=(120, 40, 40))
+        if i < len(run["party"]):
+            m = run["party"][i]
+            ic = _icon(get_icon, get_sprite, m["sid"], 32, 28)
+            im.paste(ic, (x + 18 - ic.width // 2, y + 30 - ic.height), ic)
+            lv = f"Lv.{m['lv']}"
+            _text(d, (x + 58 - _tw(lv), y + 26), lv)
+    # 제목
+    d.rectangle((0, 0, W, 20), fill=(40, 56, 88))
+    _text(d, (8, 4), f"{A.loc(run)['n']} PC · 포켓몬 맡기기·데려오기", font=BOLD, fill=(255, 232, 120), shadow=(16, 24, 40))
+    _text(d, (8, 176), "맡긴 포켓몬은 회복되고, 지닌 물건은 가방으로 돌아와요.", font=SMALL, fill=(255, 255, 255),
+          shadow=(24, 40, 80))
+    return _finish(im, d)
+
+
+def _log_lines(run: dict, n: int = 3) -> list[tuple[str, tuple]]:
+    import re
+    out = [re.sub(r"\*\*|[\u2190-\u21ff\u2600-\u27bf\u2b00-\u2bff\ufe0f\U0001f000-\U0001faff]", "", x).strip()
+           for x in (run.get("log") or [])]
+    return [(x, INK) for x in out if x][-n:]
+
+
+def field(run: dict, get_sprite: SpriteGetter | None = None, get_trainer: TrainerGetter | None = None,
+          place: str = "field") -> bytes:
+    """모험 필드 화면. 관동은 파이어레드 맵 장면, 맵이 없는 곳(성도·호연 등)은 그린 배경"""
+    if place in ("center", "home", "gym"):
+        lines = _log_lines(run) or None
+    elif place == "mart":
+        lines = [("점원: \"어서 오세요! 무엇을 도와드릴까요?\"", INK)]
+    else:
+        lines = None
+    try:
+        png = map_scene(run, place, lines) or (map_scene(run, "field") if place != "field" else None)
+    except Exception:
+        png = None
+    if png:
+        return png
     L = A.loc(run)
     im, d = _canvas()
     _background(d, L["bg"])
@@ -1047,7 +1246,7 @@ def menu(info: dict, get_sprite: SpriteGetter | None = None) -> bytes:
         cx, cy = 196 + (i % 3) * 45, 56 + (i // 3) * 42
         d.ellipse((cx - 16, cy + 26, cx + 16, cy + 32), fill=(200, 212, 228))
         sp = _sprite(get_sprite, sid, False)
-        sp.thumbnail((40, 40), Image.NEAREST)
+        sp = _fit(sp, 40, 40)
         im.paste(sp, (cx - sp.width // 2, cy + 30 - sp.height), sp)
         if lv:
             t = f"Lv{lv}"
@@ -1286,7 +1485,7 @@ def dex_page(gen: int, page: int, caught: dict[int, int], get_sprite: SpriteGett
         _text(d, (cx0 + 3, cy0 + 1), num, fill=(72, 96, 72) if own else (112, 128, 112))
         if own:
             sp = _sprite(get_sprite, sid, False)
-            sp.thumbnail((30, 30), Image.NEAREST)
+            sp = _fit(sp, 30, 30)
             im.paste(sp, (cx0 + cw // 2 - sp.width // 2, cy0 + ch - 11 - sp.height), sp)
             name = D.name(sid)
             while _tw(name, SMALL) > cw - 4 and len(name) > 1:
@@ -1327,7 +1526,7 @@ def party(run: dict, get_sprite: SpriteGetter | None = None, title: str = "파�
         d.rounded_rectangle(box, radius=5, fill=fill, outline=(216, 168, 72) if i == run["active"] else PANEL_EDGE, width=2 if i == run["active"] else 1)
         _text(d, (x0 + 5, y0 + 3), f"{i + 1}", fill=(160, 120, 40))
         sp = _sprite(get_sprite, m["sid"], False)
-        sp.thumbnail((44, 44), Image.NEAREST)
+        sp = _fit(sp, 44, 44)
         if fainted or dim:
             sp = sp.convert("LA").convert("RGBA")
         im.paste(sp, (x0 + 30 - sp.width // 2, y0 + 49 - sp.height), sp)

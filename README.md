@@ -14,7 +14,10 @@ PokeRogue처럼 웨이브를 넘어가는 **데일리·주간 챌린지**가 있
 
 ## 화면
 - 배틀 화면은 **GIF**: 포켓몬이 쇼다운 움직이는 스프라이트로 움직여요 (기술 연출은 없음). 움직이는 그림을 아직 못 받았으면 멈춘 그림이 숨쉬듯 들썩여요
-- 필드 화면에 고른 주인공이 맨 앞 포켓몬과 함께 서 있어요
+- 관동 필드는 **파이어레드 원본 맵** 위에 주인공이 서 있는 장면 (장소 팻말 + 대화창). 마을은 센터 문 앞, 센터에서 쉬면 간호순 앞,
+  숍은 점원 앞, 체육관에 도전하면 관장 앞. 성도·호연은 그린 배경
+- PC는 파이어레드 박스 화면 (숲 배경지에 박스 포켓몬, 왼쪽에 지금 파티)
+- 레드·리프·휘웅·봄이 말고 다른 주인공은 맵에서 레드(남)·리프(여) 모습으로 걸어요
 
 ## 관동 모험
 - 오박사 연구소: 설명 그림 → 주인공 고르기(레드·리프부터 플로리안·줄리아나까지 20명) → 스타팅 고르기(1~9세대 27마리, 지방 메뉴로 3마리씩 그림 한 장에), 라이벌 그린과 첫 배틀 (그린은 내 스타팅에 유리한 관동 스타팅)
@@ -65,6 +68,7 @@ PokeRogue처럼 웨이브를 넘어가는 **데일리·주간 챌린지**가 있
 - `game/adventure.py` 모험 진행 (이동·탐색·트레이너·체육관·리그·센터·PC·상점), `game/kanto.py` 관동 데이터, `game/johto.py` 성도, `game/hoenn.py` 호연 데이터
 - `game/pokedata.json.gz` 포켓몬 데이터 (`tools/build_data.py`로 PokeAPI CSV에서 생성)
 - `game/scene.py` 게임풍 그림 (배틀 GIF·필드·관동 지도, Pillow), `sprites.py` PokeAPI 스프라이트 캐시
+- `assets/maps/` 파이어레드 맵 (`tools/render_maps.py`), `assets/maps/places.json`·`assets/people/`·`assets/pc/` (`tools/build_places.py`)
 - `game/heroes.py` 주인공 목록, `assets/trainers/` 주인공 그림 (smogon/sprites, 6·8·9세대는 쇼다운에서 받음)
 - `storage.py` Neon Postgres 저장 (`DATABASE_URL`), `ui.py` 화면·버튼, `bot.py` 명령어·버튼 처리
 - 시뮬레이션: `python tools/sim_adventure.py 3 2` (모험 자동 플레이, 1·2·3 = 관동·성도·호연 챔피언까지), `python tools/simulate.py 40` (웨이브 게임)

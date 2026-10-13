@@ -545,7 +545,7 @@ def field_screen(uid: int, trainer: str, run: dict, image: bool = True) -> Scree
         _btn(view, "가방", uid, ver, "bag", emoji="🎒", row=1)
         _btn(view, "파티", uid, ver, "party", emoji="📋", row=1)
         embed.set_footer(text="사천왕은 연달아 싸워요. 가방으로 회복하고 다음 방으로 들어가세요. (지면 포켓몬센터로 돌아가요)")
-        return Screen(embed, _frozen(view), "field")
+        return Screen(embed, _frozen(view), "field", {"place": run.get("place") or "field"})
 
     if L.get("wild"):
         _btn(view, "풀숲 탐색", uid, ver, "explore", style=B.success, emoji="🌿", row=0)
@@ -599,7 +599,7 @@ def field_screen(uid: int, trainer: str, run: dict, image: bool = True) -> Scree
     region = A.region_of(run["loc"])
     embed.set_footer(text=f"{A.REGIONS[region]['n']} 배지 {len(A.region_badges(run, region))}/8 · 레벨 제한 {cap} · "
                           f"박스 {len(run['box'])}마리")
-    return Screen(embed, _frozen(view), "field")
+    return Screen(embed, _frozen(view), "field", {"place": run.get("place") or "field"})
 
 
 def move_screen(uid: int, trainer: str, run: dict, image: bool = True) -> Screen:
@@ -653,7 +653,7 @@ def pc_screen(uid: int, trainer: str, run: dict, page: int = 0, image: bool = Tr
         _btn(view, "이전 쪽", uid, ver, "pc", page - 1, row=3, disabled=page == 0)
         _btn(view, "다음 쪽", uid, ver, "pc", page + 1, row=3, disabled=page >= pages - 1)
     _btn(view, "돌아가기", uid, ver, "back", row=4)
-    return Screen(embed, _frozen(view), "party", {"title": "PC · 지금 파티"})
+    return Screen(embed, _frozen(view), "pc", {"page": page})
 
 
 MART_CATS = {"ball": "볼", "heal": "회복", "pp": "PP", "battle": "배틀용", "vit": "영양제", "evo": "진화", "tm": "기술머신"}
@@ -697,7 +697,7 @@ def mart_screen(uid: int, trainer: str, run: dict, cat: str | None = None, image
             n += 1
     embed.add_field(name="팔고 있는 물건", value="\n".join(lines)[:1024] or "-", inline=False)
     _btn(view, "돌아가기", uid, ver, "back", row=4)
-    return Screen(embed, _frozen(view), "field")
+    return Screen(embed, _frozen(view), "field", {"place": "mart"})
 
 
 # ---------- 파티·상세 정보 ----------

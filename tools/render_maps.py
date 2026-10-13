@@ -4,7 +4,7 @@
     (cd pokefirered && git sparse-checkout set data/layouts data/tilesets graphics/object_events/pics/people)
     python tools/render_maps.py <pokefirered 경로>
 
-결과: assets/maps/<레이아웃>.png (16px 블록 그대로), assets/people/<이름>.png (걷는 그림 첫 칸)
+결과: assets/maps/<레이아웃>.png (16px 블록 그대로). 사람 그림·장면 정보는 tools/build_places.py
 """
 import json
 import re
@@ -121,7 +121,6 @@ def render_layout(src: Path, layout: dict) -> Image.Image:
 def main():
     src = Path(sys.argv[1])
     OUT_MAPS.mkdir(parents=True, exist_ok=True)
-    OUT_PEOPLE.mkdir(parents=True, exist_ok=True)
     table = json.loads((src / "data/layouts/layouts.json").read_text())["layouts"]
     by_name = {l["name"].removesuffix("_Layout"): l for l in table if "name" in l}
     for name in LAYOUTS:
@@ -136,19 +135,7 @@ def main():
             continue
         img.save(OUT_MAPS / f"{name}.png", optimize=True)
         print(name, img.size)
-    for p in PEOPLE:
-        f = src / "graphics/object_events/pics/people" / f"{p}.png"
-        if not f.exists():
-            print("사람 없음:", p)
-            continue
-        sheet = Image.open(f).convert("RGBA")
-        fw = 16 if sheet.width % 16 == 0 and sheet.height == 32 else sheet.height
-        frame = sheet.crop((0, 0, 16, sheet.height)) if sheet.height == 32 else sheet.crop((0, 0, fw, sheet.height))
-        # 팔레트 0번(배경색)을 투명으로
-        bg = Image.open(f).convert("RGBA").getpixel((0, 0))
-        data = [(0, 0, 0, 0) if px[:3] == bg[:3] else px for px in frame.getdata()]
-        frame.putdata(data)
-        frame.save(OUT_PEOPLE / f"{p}.png")
+    # 사람 그림(걷는 그림 세 방향)은 tools/build_places.py가 만든다
 
 
 if __name__ == "__main__":

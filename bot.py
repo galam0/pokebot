@@ -192,12 +192,20 @@ async def render(run: dict, kind: str = "scene", **kwargs) -> discord.File | Non
             await sprites.ensure(sids=[run["party"][run["active"] if idx is None else idx]["sid"]], timeout=1.0)
             png = await asyncio.to_thread(scene.summary, run, sprites.get_sprite, idx)
             name = ui.SUMMARY_FILE
+        elif kind == "pc":
+            page = kwargs.get("page", 0)
+            shown = run["box"][page * ui.PC_PAGE:(page + 1) * ui.PC_PAGE] + run["party"]
+            await sprites.ensure(icons=[m["sid"] for m in shown], timeout=1.0)
+            png = await asyncio.to_thread(scene.pc, run, page, sprites.get_icon, sprites.get_sprite, ui.PC_PAGE)
+            name = ui.SCENE_FILE
         elif kind == "map":
             png = await asyncio.to_thread(scene.kanto_map, run)
             name = ui.SCENE_FILE
         elif kind == "field" or run["phase"] == "field":
-            await sprites.ensure(sids=_party_sids(run), trainers=[H.of(run)], timeout=1.0)
-            png = await asyncio.to_thread(scene.field, run, sprites.get_sprite, sprites.get_trainer)
+            place = kwargs.get("place", "field")
+            if not scene.place_data(run["loc"], "field"):   # 파이어레드 맵이 없는 곳은 예전 그림 (포켓몬·주인공 필요)
+                await sprites.ensure(sids=_party_sids(run), trainers=[H.of(run)], timeout=1.0)
+            png = await asyncio.to_thread(scene.field, run, sprites.get_sprite, sprites.get_trainer, place)
             name = ui.SCENE_FILE
         elif run["phase"] == "reward":
             await sprites.ensure(sids=_party_sids(run),
@@ -448,6 +456,8 @@ def _buy(run: dict, arg: str):
     return A.buy(run, item, int(n or 1))
 
 
+PLACE_OF = {"heal": "center", "gym": "gym", "league": "center"}   # 동작 → 필드에서 보여줄 장면
+
 ADV_ACTIONS = {   # 모험 필드에서 하는 동작: (run, arg)
     "explore": lambda run, arg: A.explore(run, rng),
     "trainer": lambda run, arg: A.fight_trainer(run, rng),
@@ -614,6 +624,7 @@ async def handle_component(interaction: discord.Interaction, custom_id: str):
 
         # --- 게임 상태를 바꾸는 동작 ---
         stay = None   # 바뀐 뒤 보여줄 메뉴 (없으면 기본 화면)
+        loc_before = run.get("loc")
         shop_cat = ui._shop_cat(arg) if act == "buy" and arg in E.ITEMS else None
         try:
             if adv and phase == "field" and A.in_league(run) and act not in ("next", "itemt", "itemm", "forget",
@@ -623,6 +634,10 @@ async def handle_component(interaction: discord.Interaction, custom_id: str):
                 raise ValueError("no quit in adventure")
             if adv and phase == "field" and act in ADV_ACTIONS:
                 ADV_ACTIONS[act](run, arg)
+                if act in PLACE_OF:   # 센터에서 쉬면 센터 안, 체육관에 도전하면 체육관 안 장면
+                    run["place"] = "home" if A.loc(run).get("home") else PLACE_OF[act]
+                elif act not in ("buy", "dep", "wd", "lead"):
+                    run.pop("place", None)
                 if act == "buy":
                     stay, shop_cat = "mart", ui._mart_cat(arg.rpartition(".")[0])
                 elif act in ("dep", "wd"):
@@ -676,6 +691,8 @@ async def handle_component(interaction: discord.Interaction, custom_id: str):
             return
 
         run["ver"] = run.get("ver", 0) + 1
+        if run.get("loc") != loc_before:   # 지고 센터로 돌아가는 등 장소가 바뀌면 바깥 장면
+            run.pop("place", None)
         record_dex(uid, run)
         if run["phase"] != "field":
             stay = None

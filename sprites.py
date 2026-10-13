@@ -27,6 +27,7 @@ _cache: dict[str, Image.Image | list | None] = {}     # 키 -> 이미지 또는 
 _pending: dict[str, asyncio.Task] = {}
 _anim_keys: deque[str] = deque()   # GIF 프레임은 크니까 최근 것만 들고 있는다
 ANIM_KEEP = 24
+ICON_MAX = 898   # 메뉴 아이콘(8세대)이 있는 마지막 번호. 그 뒤는 앞모습을 줄여 쓴다
 _session: aiohttp.ClientSession | None = None
 
 
@@ -39,6 +40,8 @@ def _key_url(kind: str, name) -> list[tuple[str, str]]:
         return [(f"anim:{name}", f"{BASE}/pokemon/other/showdown/{name}.gif")]
     if kind == "animback":
         return [(f"animback:{name}", f"{BASE}/pokemon/other/showdown/back/{name}.gif")]
+    if kind == "icon":
+        return [(f"icon:{name}", f"{BASE}/pokemon/versions/generation-viii/icons/{name}.png")]
     if kind == "trainer":
         return [(f"trainer:{name}", f"{TRAINER_BASE}/{TRAINER_REMOTE.get(name, name)}.png")]
     return [(f"item:{name}", f"{BASE}/items/{name}.png")]
@@ -94,8 +97,10 @@ def _start(kind: str, name) -> list[asyncio.Task]:
     return tasks
 
 
-def _starts(sids=(), backs=(), items=(), anims=(), anim_backs=(), trainers=()) -> list[asyncio.Task]:
+def _starts(sids=(), backs=(), items=(), anims=(), anim_backs=(), trainers=(), icons=()) -> list[asyncio.Task]:
     tasks = []
+    for sid in icons:
+        tasks += _start("icon", sid) + ([] if sid <= ICON_MAX else _start("front", sid))
     for sid in sids:
         tasks += _start("front", sid)
     for sid in backs:
@@ -112,14 +117,14 @@ def _starts(sids=(), backs=(), items=(), anims=(), anim_backs=(), trainers=()) -
     return tasks
 
 
-def prefetch(sids=(), backs=(), items=(), anims=(), anim_backs=(), trainers=()):
+def prefetch(sids=(), backs=(), items=(), anims=(), anim_backs=(), trainers=(), icons=()):
     """기다리지 않고 미리 받기 시작"""
-    _starts(sids, backs, items, anims, anim_backs, trainers)
+    _starts(sids, backs, items, anims, anim_backs, trainers, icons)
 
 
-async def ensure(sids=(), backs=(), items=(), anims=(), anim_backs=(), trainers=(), timeout: float = 1.0):
+async def ensure(sids=(), backs=(), items=(), anims=(), anim_backs=(), trainers=(), icons=(), timeout: float = 1.0):
     """필요한 그림을 최대 timeout초까지만 기다린다"""
-    tasks = _starts(sids, backs, items, anims, anim_backs, trainers)
+    tasks = _starts(sids, backs, items, anims, anim_backs, trainers, icons)
     if tasks:
         await asyncio.wait(tasks, timeout=timeout)
 
@@ -158,3 +163,8 @@ def get_trainer(key: str) -> Image.Image | None:
             return None
         _cache[k] = Image.open(f).convert("RGBA")
     return _cache.get(k)
+
+
+def get_icon(sid: int) -> Image.Image | None:
+    """PC·목록용 작은 아이콘 (8세대 메뉴 아이콘)"""
+    return _cache.get(f"icon:{sid}")
