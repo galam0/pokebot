@@ -710,7 +710,8 @@ def trainer_intro(run: dict) -> bytes:
     foe = _asset(f"battle/{TP.opponent(region, b)}.png") if TP.opponent(region, b) else None
     if foe:
         _put(im, d, foe, 236, 88, 96, 84)
-    me = _asset(f"battle/{TP.player_back(HR.of(run))}.png")
+    hero = HR.of(run)   # 원본 뒷모습이 없는 주인공은 색을 바꾼 뒷모습 (tools/build_trainer_pics.py)
+    me = _asset(f"battle/hero_back_{hero}.png") or _asset(f"battle/{TP.player_back(hero)}.png")
     if me:
         _put(im, d, me, 78, 152, 120, 110, kmax=BACK_ZOOM)
     # 양쪽 포켓몬 수 (볼)
