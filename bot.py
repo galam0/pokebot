@@ -216,11 +216,32 @@ class PokeBot(discord.Client):
     async def setup_hook(self):
         await start_health_server()
         await init_db()
-        # 모든 서버에 적용되는 전역 명령어로 등록 (반영까지 최대 1시간 걸릴 수 있어요)
+
+    # 전역 등록은 반영이 느려서, 봇이 들어가 있는 서버마다 '서버 전용'으로 등록해요.
+    # → 어느 서버든 몇 초 안에 명령어가 생겨요.
+    async def sync_guild(self, guild: discord.abc.Snowflake) -> int:
+        self.tree.copy_global_to(guild=guild)
+        synced = await self.tree.sync(guild=guild)
+        return len(synced)
+
+    async def on_ready(self):
+        print(f"로그인: {self.user} / 서버 {len(self.guilds)}곳")
+        if getattr(self, "_synced", False):  # 재연결 때마다 다시 하지 않음
+            return
+        self._synced = True
+        for guild in self.guilds:
+            try:
+                count = await self.sync_guild(guild)
+                print(f"명령어 {count}개 동기화: {guild.name}")
+            except Exception as e:  # 한 서버가 실패해도 나머지는 계속
+                print(f"명령어 동기화 실패 ({guild.name}): {e}")
+
+    async def on_guild_join(self, guild: discord.Guild):
         try:
-            await self.tree.sync()
+            count = await self.sync_guild(guild)
+            print(f"새 서버 참가: {guild.name} → 명령어 {count}개 등록")
         except Exception as e:
-            print(f"명령어 등록 실패: {e}")  # 실패해도 봇은 계속 켜져 있게 해요
+            print(f"새 서버 명령어 등록 실패 ({guild.name}): {e}")
 
 
 bot = PokeBot()
