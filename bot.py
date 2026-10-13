@@ -150,6 +150,31 @@ async def create_starter(user_id: int, species_id: int):
         await db.commit()
 
 
+# ---------- 경험치 ----------
+# 스타팅 포켓몬은 본가 게임에서 모두 '중간 느림(Medium Slow)' 성장 그룹이에요.
+# DB의 exp는 '현재 레벨에서 모은 경험치'예요.
+MAX_LEVEL = 100
+
+
+def total_exp(level: int) -> int:
+    """Medium Slow: 레벨 n까지 필요한 누적 경험치 = 6/5·n³ − 15n² + 100n − 140"""
+    return max(0, (6 * level**3) // 5 - 15 * level**2 + 100 * level - 140)
+
+
+def exp_to_next(level: int) -> int:
+    """현재 레벨에서 다음 레벨까지 필요한 경험치"""
+    if level >= MAX_LEVEL:
+        return 0
+    return total_exp(level + 1) - total_exp(level)
+
+
+def exp_bar(current: int, need: int, width: int = 10) -> str:
+    if need <= 0:
+        return "▰" * width
+    filled = min(width, current * width // need)
+    return "▰" * filled + "▱" * (width - filled)
+
+
 # ---------- UI ----------
 class OwnerView(discord.ui.View):
     """명령어를 실행한 본인만 조작할 수 있는 View"""
@@ -324,9 +349,15 @@ async def my_pokemon(interaction: discord.Interaction):
     name = row["nickname"] or info["name"]
 
     embed = discord.Embed(title=name, color=discord.Color.gold())
-    embed.add_field(name="레벨", value=f"Lv.{row['level']}")
-    embed.add_field(name="경험치", value=str(row["exp"]))
+    level, exp = row["level"], row["exp"]
+    need = exp_to_next(level)
+    embed.add_field(name="레벨", value=f"Lv.{level}")
     embed.add_field(name="친밀도", value=f"{row['friendship']} / 255")
+    if need:
+        exp_text = f"{exp_bar(exp, need)}\n{exp} / {need}  ·  레벨업까지 **{need - exp}** 남음"
+    else:
+        exp_text = "최고 레벨이에요!"
+    embed.add_field(name=f"경험치 (Lv.{level} → {level + 1})" if need else "경험치", value=exp_text, inline=False)
     embed.set_image(url=info["image"])
     embed.set_footer(text=f"{interaction.user.display_name} 트레이너의 파트너")
     await interaction.response.send_message(embed=embed)
