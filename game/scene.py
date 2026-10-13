@@ -1,6 +1,7 @@
 """게임 화면처럼 보이는 그림 만들기 (Pillow).
 
-작은 캔버스(320x192)에 도트로 그린 뒤 3배로 키워서 선명한 픽셀 느낌을 낸다.
+배경·상자·바는 작은 캔버스(320x192)에 도트로 그린 뒤 3배로 키우고,
+글자는 키운 뒤에 큰 그림 위에 따로 써서 깨지지 않게 한다 (나눔고딕, SIL OFL).
 포켓몬 스프라이트는 밖에서 받아 넘겨준다 (get_sprite). 없으면 빈 실루엣 자리로 그린다.
 """
 
@@ -17,8 +18,9 @@ from .text import josa
 W, H = 320, 192
 SCALE = 3
 _FONT_DIR = Path(__file__).resolve().parent.parent / "assets" / "fonts"
-FONT = ImageFont.truetype(str(_FONT_DIR / "Galmuri11.ttf"), 11)
-BOLD = ImageFont.truetype(str(_FONT_DIR / "Galmuri11-Bold.ttf"), 11)
+# 글자는 3배 크기 그림에 쓰므로 실제 크기도 3배 (좌표는 작은 캔버스 기준)
+FONT = ImageFont.truetype(str(_FONT_DIR / "NanumGothicBold.ttf"), 27)
+BOLD = ImageFont.truetype(str(_FONT_DIR / "NanumGothicExtraBold.ttf"), 29)
 
 SpriteGetter = Callable[[int, bool], Image.Image | None]   # (종 번호, 뒷모습?) -> 이미지
 
@@ -52,12 +54,16 @@ MSG_EDGE = (200, 168, 72)
 def _canvas(color=(0, 0, 0)) -> tuple[Image.Image, ImageDraw.ImageDraw]:
     im = Image.new("RGB", (W, H), color)
     d = ImageDraw.Draw(im)
-    d.fontmode = "1"   # 안티앨리어싱 없이 도트 그대로
+    d.texts = []   # 글자는 모아 뒀다가 _finish에서 큰 그림에 쓴다
     return im, d
 
 
-def _finish(im: Image.Image) -> bytes:
+def _finish(im: Image.Image, d: ImageDraw.ImageDraw) -> bytes:
     big = im.resize((W * SCALE, H * SCALE), Image.NEAREST)
+    bd = ImageDraw.Draw(big)
+    for (x, y), s, font, fill, outline in d.texts:
+        bd.text((x * SCALE, y * SCALE + 1), s, font=font, fill=fill,
+                stroke_width=3 if outline else 0, stroke_fill=outline)
     buf = io.BytesIO()
     big.save(buf, "PNG", optimize=False, compress_level=6)
     return buf.getvalue()
@@ -68,13 +74,13 @@ def _panel(d: ImageDraw.ImageDraw, box, fill=PANEL, edge=PANEL_EDGE, r=4):
 
 
 def _text(d, xy, s, font=FONT, fill=INK, shadow=None):
-    if shadow:
-        d.text((xy[0] + 1, xy[1] + 1), s, font=font, fill=shadow)
-    d.text(xy, s, font=font, fill=fill)
+    """shadow: 밝은 글자 둘레에 두르는 테두리 색"""
+    d.texts.append((xy, s, font, fill, shadow))
 
 
 def _tw(s: str, font=FONT) -> int:
-    return int(font.getlength(s))
+    """작은 캔버스 기준 글자 너비"""
+    return int(font.getlength(s) / SCALE + 0.99)
 
 
 def _bar(d, x, y, w, h, ratio, fg, bg=(64, 64, 72), edge=INK):
@@ -112,10 +118,8 @@ def _placeholder(size=64) -> Image.Image:
     """스프라이트를 아직 못 받았을 때 쓰는 빈 실루엣 자리"""
     im = Image.new("RGBA", (96, 96), (0, 0, 0, 0))
     d = ImageDraw.Draw(im)
-    d.fontmode = "1"
     o = (96 - size) // 2
     d.ellipse((o, o + 8, o + size, o + size + 8), fill=(0, 0, 0, 60))
-    _text(d, (44, 40), "?", font=BOLD, fill=(255, 255, 255, 160))
     return im
 
 
@@ -212,7 +216,7 @@ def battle(run: dict, get_sprite: SpriteGetter | None = None, message: list[str]
 
     # 메시지 창
     _message_box(d, message if message is not None else _pick_lines(run))
-    return _finish(im)
+    return _finish(im, d)
 
 
 def _pick_lines(run: dict) -> list[str]:
@@ -303,7 +307,7 @@ def summary(run: dict, get_sprite: SpriteGetter | None = None) -> bytes:
         _type_pill(d, x0 + 5, y0 + 13, m["t"])
         info = f"{'물리' if m['c'] == 0 else '특수'} {m['p']}" + (f" 명중{m['a']}" if m["a"] and m["a"] < 100 else "")
         _text(d, (x0 + 148 - _tw(info), y0 + 14), info)
-    return _finish(im)
+    return _finish(im, d)
 
 
 # ---------- 보상 화면 ----------
@@ -356,7 +360,8 @@ def rewards(run: dict, get_sprite: SpriteGetter | None = None, get_item: ItemGet
             _text(d, (x0 + 46, 56), "?", font=BOLD, fill=(120, 80, 24))
         name = r["n"]
         _text(d, (x0 + 49 - _tw(name, BOLD) // 2, 84), name, font=BOLD)
-        for j, line in enumerate(_wrap(r["d"], 90)[:2]):
+        desc = r["d"].replace(" (", "\n(").split("\n") if " (" in r["d"] else _wrap(r["d"], 90)
+        for j, line in enumerate(desc[:2]):
             _text(d, (x0 + 49 - _tw(line) // 2, 97 + j * 11), line, fill=(88, 88, 104))
     # 아래: 내 포켓몬 상태
     p = run["p"]
@@ -376,4 +381,4 @@ def rewards(run: dict, get_sprite: SpriteGetter | None = None, get_item: ItemGet
     _text(d, (66, 166), "EXP", fill=(64, 128, 200))
     _bar(d, 90, 169, 154, 4, (p["exp"] / need) if need else 1, (64, 160, 240), bg=(208, 208, 216))
     _text(d, (250, 166), f"다음 {need - p['exp']}" if need else "MAX")
-    return _finish(im)
+    return _finish(im, d)
