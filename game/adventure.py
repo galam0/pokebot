@@ -209,8 +209,9 @@ def _begin(run: dict, kind: str, mons: list[dict], name: str, **meta):
         E._reset_battle_state(m)
         m["sash"] = 0
     alive = E.alive(run)
-    if alive and E.lead(run)["hp"] <= 0:
+    if alive:   # 파티 순서에서 가장 앞의 살아 있는 포켓몬이 먼저 나간다
         run["active"] = alive[0]
+    run["battle"]["seen"] = [run["active"]]   # 지금 상대와 싸운 포켓몬 (경험치는 이 포켓몬들만)
     run["turn"] = 0
     run["phase"] = "battle"
 
@@ -489,7 +490,7 @@ def _end_battle(run: dict):
         E._reset_battle_state(m)
         m["sash"] = 0
     alive = E.alive(run)
-    if alive and E.lead(run)["hp"] <= 0:
+    if alive:   # 배틀이 끝나면 다시 파티 맨 앞 포켓몬이 앞에 선다
         run["active"] = alive[0]
 
 
@@ -500,11 +501,15 @@ def after_ko(run: dict, rng: random.Random, caught: bool = False) -> list[str]:
     mult = EXP_MULT * run.get("exp_mult", 1.0) * (1.0 if b["kind"] in ("wild", "legend") else TRAINER_EXP)
     msgs = []
     gains = b.setdefault("gains", {})   # 배틀 결과 화면용: 파티 칸 → {"exp": 모은 경험치, "lv0": 처음 레벨}
+    fought = set(b.get("seen", [])) | {run["active"]}   # 이 상대와 싸운 포켓몬만 경험치를 받는다
     for i, m in enumerate(run["party"]):
         if m["hp"] <= 0:
             continue
-        amount = E.exp_gain(m, e, mult)
         g = gains.setdefault(str(i), {"exp": 0, "lv0": m["lv"]})
+        if i not in fought:
+            continue
+        g["fought"] = True
+        amount = E.exp_gain(m, e, mult)
         if m["lv"] < E.level_cap(m):
             msgs.append(f"{D.name(m['sid'])}은(는) 경험치 **{amount}**을(를) 얻었다!")
             g["exp"] += amount
@@ -512,6 +517,7 @@ def after_ko(run: dict, rng: random.Random, caught: bool = False) -> list[str]:
     if b.get("queue"):
         nxt = b["queue"].pop(0)
         run["e"] = nxt
+        b["seen"] = [run["active"]] if E.lead(run)["hp"] > 0 else []   # 다음 상대와 싸울 포켓몬을 새로 센다
         run["turn"] = 0
         left = len(b["queue"]) + 1
         msgs.append(f"{b['name']}은(는) **{D.name(nxt['sid'])}**을(를) 내보냈다! (남은 포켓몬 {left})")

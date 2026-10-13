@@ -679,7 +679,9 @@ def battle_result(run: dict, get_icon: "IconGetter | None" = None, get_sprite: S
         if g and g["exp"]:
             gain, col = f"+{g['exp']:,} EXP", (40, 104, 200)
         elif m["hp"] <= 0:
-            gain, col = "기절해서 못 받았어요", (176, 64, 64)
+            gain, col = "기절함", (176, 64, 64)
+        elif g and not g.get("fought"):
+            gain, col = "참여 안 함", (112, 112, 128)
         elif m["lv"] >= E.level_cap(m):
             gain, col = "레벨 제한 (말을 듣는 레벨)", (128, 96, 48)
         elif not g:

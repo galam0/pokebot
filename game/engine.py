@@ -754,6 +754,8 @@ def switch(run: dict, index: int, rng: random.Random | None = None) -> str:
     old = lead(run)
     _reset_battle_state(old)
     run["active"] = index
+    if isinstance(run.get("battle"), dict):   # 모험: 지금 상대와 싸운 포켓몬으로 센다 (경험치)
+        run["battle"].setdefault("seen", []).append(index)
     new = lead(run)
     log = [] if forced else [f"돌아와, {D.name(old['sid'])}!"]
     log.append(f"가랏, **{D.name(new['sid'])}**!")
