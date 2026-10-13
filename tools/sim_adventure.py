@@ -101,8 +101,12 @@ def strength(run):
     return sum(lv) / len(lv)
 
 
+def _region(run):
+    return A.current_stage(run) or "hoenn"
+
+
 def _order(run):
-    return J.GYM_ORDER if run.get("hof") else K.GYM_ORDER
+    return A.REGIONS[_region(run)]["order"]
 
 
 def league_due(run):
@@ -110,10 +114,11 @@ def league_due(run):
 
 
 def goal(run):
-    if run.get("hof") and run["loc"] == "newbark" and A.gift_choices(run):
-        return "newbark"
+    gift_town = {"johto": "newbark", "hoenn": "littleroot"}.get(_region(run))
+    if gift_town and gift_town in A.LOC and f"gift:{gift_town}" not in run["flags"]:
+        return gift_town
     if league_due(run):
-        return "plateau"
+        return "evergrande" if _region(run) == "hoenn" else "plateau"
     for g in _order(run):
         if g not in run["badges"]:
             return next(k for k, L in A.LOC.items() if L.get("gym") == g)
@@ -121,13 +126,13 @@ def goal(run):
 
 def gym_ace(run):
     if league_due(run):
-        return 86 if run.get("hof") else 60
+        return league_level(run) + 2
     g = next(g for g in _order(run) if g not in run["badges"])
     return max(lv for _, lv in A.GYMS[g]["team"])
 
 
 def league_level(run):
-    return 84 if run.get("hof") else 56
+    return {"kanto": 56, "johto": 45, "hoenn": 52}[_region(run)]
 
 
 def hurt(run):
@@ -163,7 +168,7 @@ def field_action(run, rng, stats):
     if A.gift_available(run):
         return A.take_gift(run, rng)
     if A.gift_choices(run):
-        return A.take_gift_choice(run, A.gift_choices(run)[0][0], rng)
+        return A.take_gift_choice(run, A.gift_choices(run)[0][1], rng)
     if A.trainers_left(run) and not hurt(run):
         return A.fight_trainer(run, rng)
     if A.legend_available(run) and run["bag"].get("master-ball"):
@@ -196,12 +201,13 @@ def field_action(run, rng, stats):
 
 
 def play(starter, rng, max_steps=40000, until=1):
-    """until=1: 관동 챔피언까지, 2: 성도 챔피언까지"""
+    """until=1: 관동 챔피언까지, 2: 성도, 3: 호연 챔피언까지"""
     run = A.new_adventure(starter, rng, "sim")
     stats = {"steps": 0, "battles": 0, "blackouts": 0, "retreats": 0, "grind": 0, "gym_tries": 0, "league_tries": 0,
              "badge_steps": []}
     badges = 0
-    while stats["steps"] < max_steps and not (run.get("hof2") if until == 2 else run.get("hof")):
+    key = {1: "hof", 2: "hof2", 3: "hof3"}[until]
+    while stats["steps"] < max_steps and not run.get(key):
         stats["steps"] += 1
         ph = run["phase"]
         if ph == "battle":
@@ -222,6 +228,7 @@ def play(starter, rng, max_steps=40000, until=1):
             stats["badge_steps"].append((stats["steps"], round(strength(run))))
     stats["hof"] = run.get("hof", 0)
     stats["hof2"] = run.get("hof2", 0)
+    stats["hof3"] = run.get("hof3", 0)
     stats["badges"] = len(run["badges"])
     stats["party"] = [(D.name(m["sid"]), m["lv"]) for m in run["party"]]
     stats["box"] = len(run["box"])
@@ -234,10 +241,12 @@ if __name__ == "__main__":
     res = []
     for i in range(n):
         st = (1, 4, 7)[i % 3]
-        s = play(st, random.Random(i), 90000, until)
+        s = play(st, random.Random(i), 120000, until)
         res.append(s)
-        print(D.name(st), ("성도 챔피언" if s["hof2"] else "관동 챔피언") if s["hof"] else f"배지 {s['badges']}", "| 행동", s["steps"], "| 배틀", s["battles"],
+        print(D.name(st), ("호연 챔피언" if s["hof3"] else "성도 챔피언" if s["hof2"] else "관동 챔피언") if s["hof"]
+              else f"배지 {s['badges']}", "| 행동", s["steps"], "| 배틀", s["battles"],
               "| 기절", s["blackouts"], "| 체육관 도전", s["gym_tries"], "| 리그 도전", s["league_tries"],
               "| 수련", s["grind"], "| 배지별 (행동, 레벨)", s["badge_steps"])
         print("   파티", s["party"], "박스", s["box"])
-    print("관동 챔피언", sum(1 for s in res if s["hof"]), "· 성도 챔피언", sum(1 for s in res if s["hof2"]), "/", n, "| 행동 중앙값", statistics.median(s["steps"] for s in res))
+    print("관동", sum(1 for s in res if s["hof"]), "· 성도", sum(1 for s in res if s["hof2"]),
+          "· 호연", sum(1 for s in res if s["hof3"]), "/", n, "| 행동 중앙값", statistics.median(s["steps"] for s in res))

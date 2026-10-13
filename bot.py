@@ -616,15 +616,42 @@ async def on_command_error(interaction: discord.Interaction, error: app_commands
     await notify_failure(interaction)
 
 
+async def menu_file(user) -> discord.File | None:
+    """메뉴 카드 그림 (user가 없으면 누구나 보는 공용 패널)"""
+    try:
+        day, week = today_key(), week_key()
+        rule, mono = E.weekly_rules(week)
+        info = {"weekly": E.RULES[rule].split(":")[0] + (f" ({D.TYPE_KO[mono]})" if mono else ""),
+                "daily": "하루 한 번 도전", "public": user is None}
+        if user is not None:
+            run = await get_run(user.id, "adventure")
+            done = storage.has_result("daily", day, user.id)
+            info.update(name=user.display_name, run=run, dex=len(storage.dex(user.id)),
+                        daily=f"오늘 완료 · {done['wave']}웨이브" if done else "오늘 도전 가능")
+            if run:
+                await sprites.ensure(sids=_party_sids(run), timeout=1.0)
+        png = await asyncio.to_thread(scene.menu, info, sprites.get_sprite)
+        return discord.File(io.BytesIO(png), filename=ui.MENU_FILE)
+    except Exception as ex:
+        log.warning("메뉴 그림 실패: %s", short_error(ex))
+        return None
+
+
 @bot.tree.command(name="메뉴", description="포켓몬 메뉴 (모험·데일리·챌린지·도감·기록·초기화)")
 async def menu(interaction: discord.Interaction):
-    await interaction.response.send_message(embed=ui.menu_embed(), view=ui.menu_view(interaction.user.id), ephemeral=True)
+    file = await menu_file(interaction.user)
+    kwargs = {"file": file} if file else {}
+    await interaction.response.send_message(embed=ui.menu_embed(image=file is not None),
+                                            view=ui.menu_view(interaction.user.id), ephemeral=True, **kwargs)
 
 
 @bot.tree.command(name="세팅", description="(관리자) 이 채널에 누구나 쓰는 게임 버튼 패널을 올려요")
 @app_commands.default_permissions(manage_guild=True)
 async def setup_panel(interaction: discord.Interaction):
-    await interaction.response.send_message(embed=ui.menu_embed(public=True), view=ui.menu_view(0))
+    file = await menu_file(None)
+    kwargs = {"file": file} if file else {}
+    await interaction.response.send_message(embed=ui.menu_embed(public=True, image=file is not None),
+                                            view=ui.menu_view(0), **kwargs)
 
 
 @bot.tree.command(name="스타팅", description="오박사에게 포켓몬을 받아 관동 모험을 시작해요 (하던 모험이 있으면 이어서)")

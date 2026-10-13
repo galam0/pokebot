@@ -6,6 +6,7 @@
 """
 
 import io
+import math
 from pathlib import Path
 from typing import Callable
 
@@ -14,6 +15,7 @@ from PIL import Image, ImageDraw, ImageFont
 from . import data as D
 from . import adventure as A
 from . import engine as E
+from . import hoenn as HO
 from . import johto as J
 from . import kanto as K
 from .text import josa
@@ -25,6 +27,7 @@ _FONT_DIR = Path(__file__).resolve().parent.parent / "assets" / "fonts"
 FONT = ImageFont.truetype(str(_FONT_DIR / "NanumGothicBold.ttf"), 27)
 BOLD = ImageFont.truetype(str(_FONT_DIR / "NanumGothicExtraBold.ttf"), 29)
 SMALL = ImageFont.truetype(str(_FONT_DIR / "NanumGothicBold.ttf"), 22)
+TITLE = ImageFont.truetype(str(_FONT_DIR / "NanumGothicExtraBold.ttf"), 52)
 
 SpriteGetter = Callable[[int, bool], Image.Image | None]   # (종 번호, 뒷모습?) -> 이미지
 
@@ -661,8 +664,8 @@ def _badge(d, x, y, i: int, got: bool, palette=None):
 
 def _badge_case(d, x, y, run: dict):
     """지금 있는 지방의 배지 8개"""
-    johto = A.region_of(run["loc"]) == "johto"
-    order, palette = (J.GYM_ORDER, J.BADGE_RGB) if johto else (K.GYM_ORDER, BADGE_RGB)
+    mod = {"kanto": None, "johto": J, "hoenn": HO}[A.region_of(run["loc"])]
+    order, palette = (mod.GYM_ORDER, mod.BADGE_RGB) if mod else (K.GYM_ORDER, BADGE_RGB)
     _panel(d, (x, y, x + 8 * 16 + 6, y + 18), fill=(56, 48, 72), edge=(24, 20, 32))
     for i, g in enumerate(order):
         _badge(d, x + 4 + i * 16, y + 3, i, g in run["badges"], palette)
@@ -795,6 +798,105 @@ def kanto_map(run: dict) -> bytes:
     _text(d, (6, 1), f"{A.REGIONS[region]['n']} 지도", font=BOLD, fill=(255, 232, 120), shadow=(16, 24, 40))
     info = f"{A.REGIONS[region]['n']} 배지 {len(A.region_badges(run, region))}/8"
     _text(d, (W - _tw(info, SMALL) - 6, 1), info, font=SMALL, fill=(255, 255, 255), shadow=(16, 24, 40))
+    return _finish(im, d)
+
+
+# ---------- 메뉴 카드 ----------
+def _pokeball(d, cx, cy, r, top=(224, 64, 56)):
+    d.ellipse((cx - r, cy - r, cx + r, cy + r), fill=(248, 248, 248), outline=INK, width=2)
+    d.chord((cx - r, cy - r, cx + r, cy + r), 180, 360, fill=top, outline=INK, width=2)
+    d.line((cx - r, cy, cx + r, cy), fill=INK, width=2)
+    d.ellipse((cx - r // 3, cy - r // 3, cx + r // 3, cy + r // 3), fill=(248, 248, 248), outline=INK, width=2)
+    d.ellipse((cx - r + 3, cy - r + 4, cx - r + 7, cy - r + 8), fill=tuple(min(255, c + 70) for c in top))
+
+
+def _menu_bg(d):
+    for y in range(H):   # 남색 그라데이션 + 사선 무늬
+        t = (y // 4 * 4) / H
+        d.line((0, y, W, y), fill=(int(36 + 24 * t), int(48 + 30 * t), int(96 + 40 * t)))
+    for x in range(-H, W, 16):
+        d.line((x, H, x + H, 0), fill=(52, 68, 124), width=3)
+
+
+def menu(info: dict, get_sprite: SpriteGetter | None = None) -> bytes:
+    """메뉴 카드. info: {"name", "run"(모험 또는 None), "dex", "daily", "weekly", "public"}"""
+    im, d = _canvas()
+    _menu_bg(d)
+    run, public = info.get("run"), info.get("public")
+    # 제목
+    _pokeball(d, 22, 20, 13)
+    _text(d, (40, 4), "포켓몬 모험", font=TITLE, fill=(255, 220, 72), shadow=(40, 32, 96))
+    sub = "관동 · 성도 · 호연"
+    _text(d, (W - _tw(sub, SMALL) - 8, 10), sub, font=SMALL, fill=(208, 220, 255), shadow=(24, 32, 72))
+
+    # 왼쪽: 트레이너 카드
+    _panel(d, (8, 38, 166, 140), fill=(248, 244, 232), edge=(40, 40, 64))
+    d.rectangle((9, 39, 165, 52), fill=(232, 88, 72))
+    if public:
+        _text(d, (14, 40), "트레이너 카드", font=BOLD, fill=(255, 255, 255), shadow=(150, 40, 32))
+        lines = ["버튼을 눌러 시작해요!", "모험: 배지 8개 → 챔피언",
+                 "관동 챔피언이 되면 성도로,", "성도 챔피언이 되면 호연으로"]
+        for i, t in enumerate(lines):
+            _text(d, (14, 58 + i * 13), t, font=SMALL, fill=INK)
+    else:
+        name = info.get("name", "트레이너")
+        while _tw(name, BOLD) > 100 and len(name) > 2:
+            name = name[:-1]
+        _text(d, (14, 40), name, font=BOLD, fill=(255, 255, 255), shadow=(150, 40, 32))
+        dex = f"도감 {info.get('dex', 0)}"
+        _text(d, (160 - _tw(dex, SMALL), 41), dex, font=SMALL, fill=(255, 240, 220), shadow=(150, 40, 32))
+        rows = [("관동", K.GYM_ORDER, BADGE_RGB, "hof"), ("성도", J.GYM_ORDER, J.BADGE_RGB, "hof2"),
+                ("호연", HO.GYM_ORDER, HO.BADGE_RGB, "hof3")]
+        for i, (rn, order, pal, hk) in enumerate(rows):
+            y = 57 + i * 19
+            _text(d, (14, y), rn, font=SMALL, fill=(88, 72, 64))
+            for j, g in enumerate(order):
+                _badge(d, 40 + j * 14, y - 1, j, bool(run) and g in run["badges"], pal)
+            if run and run.get(hk):   # 챔피언: 금색 별
+                cx, cy = 158, y + 6
+                pts = []
+                for k in range(10):
+                    r = 6 if k % 2 == 0 else 3
+                    ang = -1.5708 + k * 0.6283
+                    pts.append((cx + r * math.cos(ang), cy + r * math.sin(ang)))
+                d.polygon(pts, fill=(248, 200, 48), outline=(150, 100, 16))
+        where = f"지금: {A.loc(run)['n']}" if run else "아직 모험을 시작하지 않았어요"
+        _text(d, (14, 116), where, font=SMALL, fill=(64, 64, 88))
+        if run:
+            cap = A.level_cap(run)
+            t = f"레벨 제한 {'없음' if cap >= E.MAX_LEVEL else cap} · 박스 {len(run.get('box', []))}"
+            _text(d, (14, 127), t, font=SMALL, fill=(96, 96, 112))
+
+    # 오른쪽: 파티 (없으면 스타팅 후보)
+    _panel(d, (172, 38, 312, 140), fill=(232, 240, 248), edge=(40, 40, 64))
+    d.rectangle((173, 39, 311, 52), fill=(72, 120, 200))
+    party = run["party"] if run else []
+    _text(d, (178, 40), "파티" if party else "함께 떠날 포켓몬", font=BOLD, fill=(255, 255, 255), shadow=(32, 56, 120))
+    sids = [(m["sid"], m["lv"]) for m in party] or [(1, None), (4, None), (7, None), (252, None), (393, None), (906, None)]
+    for i, (sid, lv) in enumerate(sids[:6]):
+        cx, cy = 196 + (i % 3) * 45, 56 + (i // 3) * 42
+        d.ellipse((cx - 16, cy + 26, cx + 16, cy + 32), fill=(200, 212, 228))
+        sp = _sprite(get_sprite, sid, False)
+        sp.thumbnail((40, 40), Image.NEAREST)
+        im.paste(sp, (cx - sp.width // 2, cy + 30 - sp.height), sp)
+        if lv:
+            t = f"Lv{lv}"
+            _text(d, (cx - _tw(t) // 2, cy + 31), t, fill=INK)
+
+    # 아래: 모드 3칸
+    tiles = [("모험", "이어서 하기" if run else "새로 시작", (64, 168, 96)),
+             ("데일리", info.get("daily", "하루 한 번 도전"), (232, 152, 48)),
+             ("주간 챌린지", info.get("weekly", "이번 주 규칙"), (176, 96, 208))]
+    tw = (W - 16 - 8) // 3
+    for i, (title, desc, col) in enumerate(tiles):
+        x0 = 8 + i * (tw + 4)
+        dark = tuple(max(0, c - 70) for c in col)
+        d.rounded_rectangle((x0, 146, x0 + tw, 186), radius=4, fill=col, outline=dark, width=2)
+        d.rectangle((x0 + 3, 149, x0 + tw - 3, 151), fill=tuple(min(255, c + 50) for c in col))
+        _text(d, (x0 + 7, 152), title, font=BOLD, fill=(255, 255, 255), shadow=dark)
+        while _tw(desc, SMALL) > tw - 12 and len(desc) > 2:
+            desc = desc[:-1]
+        _text(d, (x0 + 7, 170), desc, font=SMALL, fill=(255, 255, 240), shadow=dark)
     return _finish(im, d)
 
 

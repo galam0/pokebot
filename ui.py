@@ -734,13 +734,15 @@ def menu_view(uid: int) -> discord.ui.View:
     return _frozen(view)
 
 
-def menu_embed(public: bool = False) -> discord.Embed:
-    e = discord.Embed(title="🎮 포켓몬 관동·성도 모험", color=0x5865F2, description=(
-        "태초마을에서 출발해 관동 배지 8개를 모아 챔피언이 되고, 같은 파티로 성도 지방까지 도전하는 게임이에요.\n\n"
-        "**모험** 오박사에게 포켓몬을 받아 시작하거나, 하던 모험을 이어서 해요 (진행은 계속 저장돼요)\n"
-        "**데일리** 오늘 모두 같은 조건으로 하루 한 번 도전하는 웨이브 게임\n"
-        "**주간 챌린지** 이번 주 특별 규칙으로 도전하는 웨이브 게임\n"
-        "**이어하기** 진행 중인 화면 다시 불러오기 · **모험 초기화** 처음부터 다시"))
+MENU_FILE = "menu.png"
+
+
+def menu_embed(public: bool = False, image: bool = False) -> discord.Embed:
+    e = discord.Embed(title="🎮 포켓몬 모험", color=0x5865F2, description=(
+        "관동에서 배지 8개를 모아 챔피언이 되고, 같은 포켓몬과 성도·호연까지 도전해요.\n"
+        "**모험** 시작·이어하기 · **데일리** 하루 한 번 · **주간 챌린지** 주에 한 번 · **모험 초기화** 처음부터"))
+    if image:
+        e.set_image(url=f"attachment://{MENU_FILE}")
     if public:
         e.set_footer(text="누구나 버튼을 눌러 시작할 수 있어요. 게임은 전용 스레드에서 진행돼요.")
     return e
@@ -754,10 +756,12 @@ def help_embed() -> discord.Embed:
                 "⚔️ 트레이너와 싸우면 상금을 받아요. 잠긴 길은 배지를 모으면 열려요.", inline=False)
     e.add_field(name="체육관·리그", value="관동 체육관 8곳(웅~비주기)에서 배지와 기술머신을 받아요. "
                 "배지가 늘수록 더 높은 레벨까지 말을 들어요. 배지 8개면 석영고원에서 사천왕과 챔피언에게 도전해요.", inline=False)
-    e.add_field(name="성도 지방", value="관동 챔피언이 되면 석영고원 동쪽 26·27번도로로 성도에 가요. 파티·PC·가방은 그대로예요. "
-                "공박사에게 성도 스타팅을 하나 더 받고, 체육관 8곳(비상~이향)을 지나 성도 리그(목호)에 도전해요.", inline=False)
+    e.add_field(name="성도·호연 지방", value="관동 챔피언이 되면 석영고원 동쪽 26·27번도로로 성도에, 성도 챔피언이 되면 "
+                "담청시티 항구에서 배를 타고 호연에 가요. 포켓몬·가방은 그대로 데려가지만, 새 지방에 처음 들어가면 "
+                "파티·PC 레벨이 Lv.8로 맞춰져요(진화·기술은 유지). 지방마다 스타팅을 하나 더 받아요.", inline=False)
     e.add_field(name="전설", value="관동: 썬더·프리저·파이어·잠만보, 챔피언 후 뮤츠·뮤. 성도: 라이코·앤테이·스이쿤·칠색조·루기아, "
-                "성도 챔피언 후 세레비. 모험의 전설은 잘 잡히게 해 뒀고, 쓰러뜨리거나 도망쳐도 다시 만날 수 있어요.", inline=False)
+                "챔피언 후 세레비. 호연: 가이오가·그란돈·레쿠쟈, 챔피언 후 레지 3마리·라티아스·라티오스. "
+                "모험의 전설은 잘 잡히게 해 뒀고, 쓰러뜨리거나 도망쳐도 다시 만날 수 있어요.", inline=False)
     e.add_field(name="센터·상점·PC", value="🏥 포켓몬센터에서 무료로 회복해요. 파티가 모두 쓰러지면 돈을 조금 잃고 마지막 센터로 돌아가요. "
                 "🛒 상점은 배지가 늘수록 파는 물건이 늘고, 💻 PC에 7마리째부터 잡은 포켓몬이 보관돼요.", inline=False)
     e.add_field(name="데일리·챌린지", value="웨이브를 넘어가는 짧은 게임이에요. 모두 같은 조건으로 도전해 랭킹을 겨뤄요.", inline=False)
@@ -804,7 +808,8 @@ def period_board_embed(title: str, rows: list[dict], me: int, extra: str = "") -
 def adventure_board(rows: list[tuple[int, dict, int]], me: int) -> discord.Embed:
     """모험 랭킹. rows: (유저, 모험 상태, 도감 수) — 챔피언 횟수 → 배지 → 도감 순"""
     e = discord.Embed(title="🗺️ 관동 모험 랭킹", color=0x3BA55D)
-    rows = sorted(rows, key=lambda r: (-r[1].get("hof2", 0), -r[1].get("hof", 0), -len(r[1]["badges"]), -r[2]))
+    rows = sorted(rows, key=lambda r: (-r[1].get("hof3", 0), -r[1].get("hof2", 0), -r[1].get("hof", 0),
+                                       -len(r[1]["badges"]), -r[2]))
     mine = next(((i, r) for i, r in enumerate(rows) if r[0] == me), None)
     if mine:
         i, (_, run, dex) = mine
