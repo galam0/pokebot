@@ -879,15 +879,14 @@ def field(run: dict, get_sprite: SpriteGetter | None = None, get_trainer: Traine
     _text(d, (W - _tw(money) - 8, 6), money, fill=(255, 255, 255), shadow=(16, 24, 40))
     # 왼쪽: 주인공 + 맨 앞 포켓몬
     _platform(d, 56, 112, 44, 10, L["bg"])
-    hero = _hero(get_trainer, HR.of(run))
+    hero = _hero(get_trainer, HR.of(run))   # 도트가 깨지지 않게 줄이지 않고 원래 크기로
+    hero_right = 0
     if hero:
-        hero.thumbnail((48, 80), Image.NEAREST)
-        im.paste(hero, (32 - hero.width // 2, 118 - hero.height), hero)
+        im.paste(hero, (6, 118 - hero.height), hero)
+        hero_right = 6 + hero.width
     if run["party"]:
         sp = _sprite(get_sprite, E.lead(run)["sid"], False)
-        if hero:
-            sp.thumbnail((56, 64), Image.NEAREST)
-        cx = 76 if hero else 56
+        cx = max(56, hero_right + sp.width // 2 - 6) if hero else 56
         im.paste(sp, (cx - sp.width // 2, 116 - sp.height), sp)
     cap = "없음" if A.level_cap(run) >= E.MAX_LEVEL else f"Lv.{A.level_cap(run)}"
     tag = f"레벨 제한 {cap}" + (f" · 박스 {len(run['box'])}" if run.get("box") else "")
@@ -1072,31 +1071,47 @@ def menu(info: dict, get_sprite: SpriteGetter | None = None) -> bytes:
 
 
 # ---------- 주인공 고르기 ----------
+HERO_COLS, HERO_ZOOM = 5, 2
+HERO_CELL_W, HERO_CELL_H = 188, 236
+
+
 def heroes(selected: str, get_trainer: TrainerGetter | None = None) -> bytes:
-    """역대 주인공을 두 줄로 늘어놓고, 고른 주인공을 표시"""
-    im, d = _canvas()
-    _menu_bg(d)
+    """역대 주인공을 원래 도트 그대로(정수배) 늘어놓고 이름을 붙인다. 고른 주인공은 노란 칸"""
     sel = HR.valid(selected)
-    _, name, gen, game = next(h for h in HR.HEROES if h[0] == sel)
-    _text(d, (8, 3), "주인공 고르기", font=BOLD, fill=(255, 220, 72), shadow=(40, 32, 96))
-    info = f"{name} · {gen}세대 {game}"
-    _text(d, (W - _tw(info, BOLD) - 8, 3), info, font=BOLD, fill=(255, 255, 255), shadow=(40, 32, 96))
-    per_row = (len(HR.HEROES) + 1) // 2
-    cw = (W - 8) // per_row
-    for i, (key, *_rest) in enumerate(HR.HEROES):
-        row, col = divmod(i, per_row)
-        x0, y0 = 4 + col * cw, 20 + row * 86
+    rows = (len(HR.HEROES) + HERO_COLS - 1) // HERO_COLS
+    w, top = HERO_COLS * HERO_CELL_W + 20, 70
+    h = top + rows * HERO_CELL_H + 10
+    im = Image.new("RGB", (w, h))
+    d = ImageDraw.Draw(im)
+    for y in range(0, h, 4):   # 남색 그라데이션
+        t = y / h
+        d.rectangle((0, y, w, y + 3), fill=(int(36 + 24 * t), int(48 + 30 * t), int(96 + 40 * t)))
+    _, name, gen, game = next(x for x in HR.HEROES if x[0] == sel)
+    d.text((24, 10), "주인공 고르기", font=TITLE, fill=(255, 220, 72), stroke_width=3, stroke_fill=(40, 32, 96))
+    info = f"지금: {name} · {gen}세대 {game}"
+    d.text((w - 24 - BOLD.getlength(info), 24), info, font=BOLD, fill=(255, 255, 255), stroke_width=3,
+           stroke_fill=(40, 32, 96))
+    for i, (key, hname, hgen, hgame) in enumerate(HR.HEROES):
+        r, c = divmod(i, HERO_COLS)
+        x0, y0 = 10 + c * HERO_CELL_W, top + r * HERO_CELL_H
+        box = (x0 + 4, y0 + 4, x0 + HERO_CELL_W - 4, y0 + HERO_CELL_H - 4)
         if key == sel:
-            d.rounded_rectangle((x0, y0, x0 + cw - 2, y0 + 82), radius=3, fill=(255, 236, 160), outline=(232, 168, 48), width=2)
+            d.rounded_rectangle(box, radius=10, fill=(255, 236, 160), outline=(232, 168, 48), width=5)
         else:
-            d.rounded_rectangle((x0, y0, x0 + cw - 2, y0 + 82), radius=3, fill=(64, 84, 148))
+            d.rounded_rectangle(box, radius=10, fill=(64, 84, 148), outline=(84, 104, 172), width=2)
+        foot = y0 + HERO_CELL_H - 68
         img = _hero(get_trainer, key)
         if img is None:   # 아직 못 받은 그림: 실루엣 자리
-            d.ellipse((x0 + 6, y0 + 20, x0 + cw - 8, y0 + 40), fill=(48, 60, 112))
-            continue
-        img.thumbnail((cw - 4, 78), Image.NEAREST)
-        im.paste(img, (x0 + (cw - 2) // 2 - img.width // 2, y0 + 80 - img.height), img)
-    return _finish(im, d)
+            d.ellipse((x0 + 54, foot - 110, x0 + HERO_CELL_W - 54, foot - 20), fill=(48, 60, 112))
+        else:
+            k = HERO_ZOOM if max(img.width, img.height) * HERO_ZOOM <= HERO_CELL_W - 16 else 1
+            img = img.resize((img.width * k, img.height * k), Image.NEAREST)
+            im.paste(img, (x0 + HERO_CELL_W // 2 - img.width // 2, foot - img.height), img)
+        ink, sub = (INK, (120, 96, 48)) if key == sel else ((255, 255, 255), (200, 212, 248))
+        d.text((x0 + HERO_CELL_W // 2 - BOLD.getlength(hname) / 2, foot + 4), hname, font=BOLD, fill=ink)
+        info = f"{hgen}세대 · {hgame}"
+        d.text((x0 + HERO_CELL_W // 2 - SMALL.getlength(info) / 2, foot + 36), info, font=SMALL, fill=sub)
+    return _png(im)
 
 
 # ---------- 도감 ----------

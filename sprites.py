@@ -22,6 +22,7 @@ log = logging.getLogger("pokebot.sprites")
 BASE = "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites"
 TRAINER_BASE = "https://play.pokemonshowdown.com/sprites/trainers"
 TRAINER_DIR = Path(__file__).resolve().parent / "assets" / "trainers"
+TRAINER_REMOTE = {"florian": "florian-s", "juliana": "juliana-s"}   # 쇼다운 파일 이름이 다른 주인공
 _cache: dict[str, Image.Image | list | None] = {}     # 키 -> 이미지 또는 GIF 프레임 목록 (None = 없는 그림)
 _pending: dict[str, asyncio.Task] = {}
 _anim_keys: deque[str] = deque()   # GIF 프레임은 크니까 최근 것만 들고 있는다
@@ -39,7 +40,7 @@ def _key_url(kind: str, name) -> list[tuple[str, str]]:
     if kind == "animback":
         return [(f"animback:{name}", f"{BASE}/pokemon/other/showdown/back/{name}.gif")]
     if kind == "trainer":
-        return [(f"trainer:{name}", f"{TRAINER_BASE}/{name}.png")]
+        return [(f"trainer:{name}", f"{TRAINER_BASE}/{TRAINER_REMOTE.get(name, name)}.png")]
     return [(f"item:{name}", f"{BASE}/items/{name}.png")]
 
 
