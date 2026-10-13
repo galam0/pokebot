@@ -1075,21 +1075,94 @@ HERO_COLS, HERO_ZOOM = 5, 2
 HERO_CELL_W, HERO_CELL_H = 188, 236
 
 
-def heroes(selected: str, get_trainer: TrainerGetter | None = None) -> bytes:
-    """역대 주인공을 원래 도트 그대로(정수배) 늘어놓고 이름을 붙인다. 고른 주인공은 노란 칸"""
+_PEOPLE_DIR = Path(__file__).resolve().parent.parent / "assets" / "people"
+INTRO_LINES = [
+    "태초마을에서 출발해 관동의 도로와 동굴을 지나며 포켓몬을 잡고 키워요.",
+    "체육관 8곳의 배지를 모아 석영고원에서 사천왕과 챔피언에게 도전해요.",
+    "관동 챔피언이 되면 파티와 PC를 그대로 데리고 성도 지방으로 떠날 수 있어요.",
+    "배지가 늘수록 더 높은 레벨까지 말을 들어요. 지면 마지막 포켓몬센터로 돌아가요.",
+    "진행은 계속 저장되고, /초기화로 처음부터 다시 할 수 있어요.",
+]
+INTRO_DOT = [(232, 88, 72), (240, 176, 48), (88, 168, 96), (88, 144, 232), (176, 112, 208)]
+
+
+def _wrap_px(s: str, font, width: float) -> list[str]:
+    """큰 그림용: 글자 폭(픽셀)에 맞춰 띄어쓰기 단위로 줄바꿈"""
+    lines, cur = [], ""
+    for word in s.split(" "):
+        t = f"{cur} {word}" if cur else word
+        if font.getlength(t) <= width or not cur:
+            cur = t
+        else:
+            lines.append(cur)
+            cur = word
+    return lines + ([cur] if cur else [])
+
+
+def _intro_text_w(w: int) -> int:
+    return w - 180 - 72   # 안내 칸 안쪽 글자 폭
+
+
+def _intro_height(w: int) -> int:
+    n = sum(len(_wrap_px(t, FONT, _intro_text_w(w))) for t in INTRO_LINES)
+    return 224 + n * 36 + len(INTRO_LINES) * 8 + 60
+
+
+def _intro(im: Image.Image, d: ImageDraw.ImageDraw, w: int, region: str):
+    """오박사 연구소 설명 (위쪽): 오박사 대사 창 + 모험 안내"""
+    d.text((24, 10), "오박사 연구소", font=TITLE, fill=(255, 220, 72), stroke_width=3, stroke_fill=(40, 32, 96))
+    # 오박사 (필드 도트를 6배)
+    try:
+        oak = Image.open(_PEOPLE_DIR / "prof_oak.png").convert("RGBA")
+        oak = oak.resize((oak.width * 6, oak.height * 6), Image.NEAREST)
+        im.paste(oak, (40, 84), oak)
+    except FileNotFoundError:
+        pass
+    # 대사 창 (게임 메시지 창 모양)
+    x0, y0, x1 = 160, 84, w - 20
+    d.rounded_rectangle((x0, y0, x1, y0 + 120), radius=10, fill=MSG_EDGE)
+    d.rounded_rectangle((x0 + 6, y0 + 6, x1 - 6, y0 + 114), radius=8, fill=MSG_BG, outline=(24, 32, 56), width=2)
+    say = "오오, 왔구나! 함께 떠날 포켓몬을 골라 보거라. 먼 지방에서 온 포켓몬도 있단다."
+    d.text((x0 + 24, y0 + 16), "오박사", font=BOLD, fill=(255, 220, 120))
+    for k, line in enumerate(_wrap_px(say, FONT, x1 - x0 - 48)[:2]):
+        d.text((x0 + 24, y0 + 50 + k * 32), line, font=FONT, fill=(248, 248, 248))
+    # 안내 (색 점 + 글)
+    y = y0 + 140
+    wrapped = [_wrap_px(t, FONT, _intro_text_w(w)) for t in INTRO_LINES]
+    d.rounded_rectangle((x0, y - 12, x1, y - 12 + sum(len(ls) * 36 + 8 for ls in wrapped) + 20),
+                        radius=10, fill=PANEL, outline=PANEL_EDGE, width=2)
+    for lines, col in zip(wrapped, INTRO_DOT):
+        d.ellipse((x0 + 20, y + 10, x0 + 36, y + 26), fill=col, outline=INK, width=2)
+        for line in lines:
+            d.text((x0 + 50, y), line, font=FONT, fill=INK)
+            y += 36
+        y += 8
+    tip = f"스타팅 지방: {region}  ·  아래 메뉴에서 주인공과 지방을 바꿀 수 있어요"
+    d.text((x0 + 4, y + 18), tip, font=SMALL, fill=(208, 220, 255))
+
+
+def heroes(selected: str, get_trainer: TrainerGetter | None = None, region: str | None = None) -> bytes:
+    """역대 주인공을 원래 도트 그대로(정수배) 늘어놓고 이름을 붙인다. 고른 주인공은 노란 칸.
+    region을 주면 위에 오박사 연구소 설명을 함께 그린다 (모험 시작 화면)."""
     sel = HR.valid(selected)
     rows = (len(HR.HEROES) + HERO_COLS - 1) // HERO_COLS
-    w, top = HERO_COLS * HERO_CELL_W + 20, 70
+    w = HERO_COLS * HERO_CELL_W + 20
+    intro_h = _intro_height(w) if region else 0
+    top = intro_h + 70
     h = top + rows * HERO_CELL_H + 10
     im = Image.new("RGB", (w, h))
     d = ImageDraw.Draw(im)
     for y in range(0, h, 4):   # 남색 그라데이션
         t = y / h
         d.rectangle((0, y, w, y + 3), fill=(int(36 + 24 * t), int(48 + 30 * t), int(96 + 40 * t)))
+    if region:
+        _intro(im, d, w, region)
+        d.line((20, intro_h - 6, w - 20, intro_h - 6), fill=(96, 116, 188), width=3)
     _, name, gen, game = next(x for x in HR.HEROES if x[0] == sel)
-    d.text((24, 10), "주인공 고르기", font=TITLE, fill=(255, 220, 72), stroke_width=3, stroke_fill=(40, 32, 96))
+    d.text((24, intro_h + 10), "주인공 고르기", font=TITLE, fill=(255, 220, 72), stroke_width=3,
+           stroke_fill=(40, 32, 96))
     info = f"지금: {name} · {gen}세대 {game}"
-    d.text((w - 24 - BOLD.getlength(info), 24), info, font=BOLD, fill=(255, 255, 255), stroke_width=3,
+    d.text((w - 24 - BOLD.getlength(info), intro_h + 24), info, font=BOLD, fill=(255, 255, 255), stroke_width=3,
            stroke_fill=(40, 32, 96))
     for i, (key, hname, hgen, hgame) in enumerate(HR.HEROES):
         r, c = divmod(i, HERO_COLS)

@@ -102,7 +102,9 @@ def adventure_start_screen(uid, region: str = "관동", hero: str = H.DEFAULT,
                      "모험 중에도 `/주인공`으로 바꿀 수 있어요.\n"
                      f"지방을 바꾸면 다른 세대 스타팅도 고를 수 있어요. 지금: **{region}**"),
         color=0x3BA55D)]
-    if image:
+    if image:   # 설명은 그림(오박사 연구소 + 주인공 고르기)에 들어 있다
+        embeds[0].description = (f"주인공: **{hname}** ({hgen}세대 · {hgame}) · 스타팅 지방: **{region}**\n"
+                                  "아래 메뉴에서 주인공과 지방을 고르고, 버튼으로 함께 떠날 포켓몬을 골라 주세요.")
         embeds[0].set_image(url=f"attachment://{HEROES_FILE}")
     view = discord.ui.View(timeout=None)
     view.add_item(discord.ui.Select(

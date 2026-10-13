@@ -276,11 +276,11 @@ async def post_in_thread(interaction: discord.Interaction, thread_name: str, con
     await interaction.response.send_message(content=content, embeds=embeds, view=view, **kwargs)
 
 
-async def heroes_file(hero: str) -> discord.File | None:
-    """주인공 고르기 그림 (6·8·9세대 주인공 그림은 처음 한 번 받아 온다)"""
+async def heroes_file(hero: str, region: str | None = None) -> discord.File | None:
+    """주인공 고르기 그림 (region을 주면 오박사 연구소 설명까지). 6·8·9세대 주인공 그림은 처음 한 번 받아 온다"""
     try:
         await sprites.ensure(trainers=[k for k, *_ in H.HEROES], timeout=1.0)
-        png = await asyncio.to_thread(scene.heroes, hero, sprites.get_trainer)
+        png = await asyncio.to_thread(scene.heroes, hero, sprites.get_trainer, region)
         return discord.File(io.BytesIO(png), filename=ui.HEROES_FILE)
     except Exception as ex:
         log.warning("주인공 그림 실패: %s", short_error(ex))
@@ -300,7 +300,7 @@ async def start_game(interaction: discord.Interaction, mode: str):
         return
     file = None
     if mode == "adventure":
-        file = await heroes_file(H.DEFAULT)
+        file = await heroes_file(H.DEFAULT, "관동")
         content, embeds, view = ui.adventure_start_screen(slot, image=file is not None)
         sprites.prefetch(backs=ui.REGIONS["관동"] + [4, 7, 1])
         title = f"{name}의 관동 모험"
@@ -466,7 +466,8 @@ async def handle_component(interaction: discord.Interaction, custom_id: str):
                 value = (interaction.data.get("values") or [""])[0]
                 region, hero = (value, arg) if act == "region" else (arg, value)
                 hero = H.valid(hero)
-                file = await heroes_file(hero)
+                region = region if region in ui.REGIONS else "관동"
+                file = await heroes_file(hero, region)
                 content, embeds, view = ui.adventure_start_screen(slot, region, hero, image=file is not None)
                 sprites.prefetch(backs=ui.REGIONS.get(region, []))
                 await interaction.response.edit_message(content=content or None, embeds=embeds, view=view,
