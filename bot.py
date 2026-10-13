@@ -226,7 +226,7 @@ class PokeBot(discord.Client):
 bot = PokeBot()
 
 
-@bot.tree.command(name="시작", description="스타팅 포켓몬을 골라 모험을 시작해요")
+@bot.tree.command(name="스타팅", description="스타팅 포켓몬을 골라 모험을 시작해요")
 async def start(interaction: discord.Interaction):
     if await has_any_pokemon(interaction.user.id):
         await interaction.response.send_message(
@@ -245,7 +245,7 @@ async def my_pokemon(interaction: discord.Interaction):
     row = await get_partner(interaction.user.id)
     if row is None:
         await interaction.response.send_message(
-            "아직 파트너가 없어요. `/시작`으로 스타팅 포켓몬을 골라보세요!", ephemeral=True
+            "아직 파트너가 없어요. `/스타팅`으로 스타팅 포켓몬을 골라보세요!", ephemeral=True
         )
         return
 
