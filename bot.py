@@ -179,7 +179,7 @@ def _party_sids(run: dict) -> list[int]:
     return [m["sid"] for m in run["party"]]
 
 
-async def render(run: dict, kind: str = "scene", **kwargs) -> discord.File | None:
+async def render(run: dict, kind: str = "scene", animate: bool = False, **kwargs) -> discord.File | None:
     """화면 그림. kind: scene(배틀/보상) / party / summary / path. 실패하면 None → 글자 화면으로 대신 보여준다."""
     try:
         p, e = E.lead(run), run.get("e")
@@ -215,11 +215,16 @@ async def render(run: dict, kind: str = "scene", **kwargs) -> discord.File | Non
                                  items=[scene.reward_icon(k) for k in run.get("rewards", [])], timeout=1.0)
             png = await asyncio.to_thread(scene.rewards, run, sprites.get_sprite, sprites.get_item)
             name = ui.SCENE_FILE
-        else:   # 배틀: 포켓몬이 움직이는 GIF
+        elif animate:   # 배틀 GIF (버튼이 먼저 나간 뒤 뒤에서 만들어 바꿔 끼운다)
             await sprites.ensure(sids=[e["sid"]] if e else [], backs=[p["sid"]], anims=[e["sid"]] if e else [],
-                                 anim_backs=[p["sid"]], timeout=1.0)
+                                 anim_backs=[p["sid"]], timeout=4.0)
             png = await asyncio.to_thread(scene.battle_gif, run, sprites.get_sprite, sprites.get_anim)
             name = ui.SCENE_GIF
+        else:   # 배틀: 먼저 멈춘 그림 (빠르다)
+            await sprites.ensure(sids=[e["sid"]] if e else [], backs=[p["sid"]], timeout=1.0)
+            sprites.prefetch(anims=[e["sid"]] if e else [], anim_backs=[p["sid"]])
+            png = await asyncio.to_thread(scene.battle, run, sprites.get_sprite)
+            name = ui.SCENE_FILE
         return discord.File(io.BytesIO(png), filename=name)
     except Exception as ex:
         log.warning("그림 실패 (%s): %s", kind, short_error(ex))
@@ -247,7 +252,7 @@ async def show(interaction: discord.Interaction, run: dict, make, send: bool = F
     file = await render(run, probe.image, **probe.image_args)
     sc = probe if file else make(False)
     if file and sc.embed.image and sc.embed.image.url != f"attachment://{file.filename}":
-        sc.embed.set_image(url=f"attachment://{file.filename}")   # 배틀은 GIF로 붙는다
+        sc.embed.set_image(url=f"attachment://{file.filename}")
     if send:
         kwargs = {"file": file} if file else {}
         await interaction.response.send_message(content=content or sc.content, embed=sc.embed, view=sc.view,
@@ -256,6 +261,26 @@ async def show(interaction: discord.Interaction, run: dict, make, send: bool = F
         await interaction.response.edit_message(content=content, embeds=[sc.embed], view=sc.view,
                                                 attachments=[file] if file else [])
     prefetch_next(run)
+    if file and probe.image == "scene" and _is_battle_scene(run):   # 버튼은 이미 나갔고, 움직이는 그림은 뒤에서
+        _bg(_animate(interaction, run, sc.embed, run.get("ver", 0)), "배틀 GIF")
+
+
+def _is_battle_scene(run: dict) -> bool:
+    return run["phase"] not in ("field", "reward") and not (run.get("battle") or {}).get("intro")
+
+
+async def _animate(interaction: discord.Interaction, run: dict, embed: discord.Embed, ver: int):
+    """배틀 화면의 멈춘 그림을 움직이는 GIF로 바꿔 끼운다. 그사이 다음 턴으로 넘어갔으면 버린다."""
+    p, e = E.lead(run), run.get("e")
+    await sprites.ensure(anims=[e["sid"]] if e else [], anim_backs=[p["sid"]], timeout=4.0)
+    if run.get("ver", 0) != ver:   # 그림을 받는 사이에 다음 턴으로 넘어갔다
+        return
+    gif = await render(run, "scene", animate=True)
+    if not gif or run.get("ver", 0) != ver:
+        return
+    embed = embed.copy()
+    embed.set_image(url=f"attachment://{gif.filename}")
+    await interaction.edit_original_response(embeds=[embed], attachments=[gif])
 
 
 def _main(slot: str, trainer: str, run: dict):

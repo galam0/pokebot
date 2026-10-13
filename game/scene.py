@@ -501,8 +501,8 @@ def battle(run: dict, get_sprite: SpriteGetter | None = None, message: list[str]
 
 
 AnimGetter = Callable[[int, bool], list | None]   # (종 번호, 뒷모습?) -> [(그림, ms)] 또는 None
-GIF_STEP = 60          # 프레임 간격 (ms)
-GIF_MAX_MS = 2400      # 한 바퀴 최대 길이
+GIF_STEP = 80          # 프레임 간격 (ms)
+GIF_MAX_MS = 1600      # 한 바퀴 최대 길이 (프레임이 많으면 만들기·올리기가 느리다)
 GIF_IDLE_MS = 1200     # 움직이는 그림이 없을 때 숨쉬기 한 바퀴
 
 
