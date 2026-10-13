@@ -532,6 +532,13 @@ def after_ko(run: dict, rng: random.Random, caught: bool = False) -> list[str]:
     return msgs
 
 
+RIVAL_LOSE = {   # 라이벌에게 이겼을 때 한마디
+    "그린": "쳇... 다음엔 안 질 거다! 기억해 둬!",
+    "실버": "...흥. 약한 포켓몬 탓이 아니야. 다음엔 더 강해져서 돌아오겠어.",
+    "봄이": "와, 정말 강하다! 나도 포켓몬이랑 더 열심히 할게!",
+}
+
+
 def _result(run: dict, b: dict, caught: bool) -> dict:
     """배틀이 끝나고 필드로 돌아올 때 한 번 보여줄 결과 (포켓몬마다 얻은 경험치·레벨)"""
     foe = b.get("name") if b.get("kind") not in ("wild", "legend") else D.name(run["e"]["sid"])
@@ -564,7 +571,8 @@ def _victory(run: dict, rng: random.Random, caught: bool) -> list[str]:
                 msgs.extend(give_item(run, *L["clear_gift"]))
         elif kind == "rival":
             run["flags"].append(f"rival{b['stage']}")
-            msgs.append("그린: \"쳇... 다음엔 안 질 거다! 기억해 둬!\"")
+            who = b["name"].split()[-1]   # 그린 / 실버 / 봄이
+            msgs.append(f"{who}: \"{RIVAL_LOSE.get(who, '다음엔 안 질 거야!')}\"")
         elif kind == "gym":
             g = GYMS[b["gym"]]
             run["badges"].append(b["gym"])
