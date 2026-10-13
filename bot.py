@@ -192,6 +192,10 @@ async def render(run: dict, kind: str = "scene", animate: bool = False, **kwargs
             await sprites.ensure(sids=[run["party"][run["active"] if idx is None else idx]["sid"]], timeout=1.0)
             png = await asyncio.to_thread(scene.summary, run, sprites.get_sprite, idx)
             name = ui.SUMMARY_FILE
+        elif kind == "result":
+            await sprites.ensure(icons=_party_sids(run), timeout=1.0)
+            png = await asyncio.to_thread(scene.battle_result, run, sprites.get_icon, sprites.get_sprite)
+            name = ui.SCENE_FILE
         elif kind == "intro":
             png = await asyncio.to_thread(scene.trainer_intro, run)
             name = ui.SCENE_FILE
@@ -662,6 +666,8 @@ async def handle_component(interaction: discord.Interaction, custom_id: str):
             return
         stay = None   # 바뀐 뒤 보여줄 메뉴 (없으면 기본 화면)
         loc_before = run.get("loc")
+        if phase == "field":   # 배틀 결과는 필드에서 한 번 보여 주고 다음 동작에서 지운다
+            run.pop("result", None)
         shop_cat = ui._shop_cat(arg) if act == "buy" and arg in E.ITEMS else None
         try:
             if adv and phase == "field" and A.in_league(run) and act not in ("next", "itemt", "itemm", "forget",

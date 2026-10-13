@@ -638,6 +638,63 @@ def _message_box(d, lines: list[str]):
         y += 12
 
 
+# ---------- 배틀 결과 ----------
+def battle_result(run: dict, get_icon: "IconGetter | None" = None, get_sprite: SpriteGetter | None = None) -> bytes:
+    """배틀이 끝난 뒤: 파티 포켓몬마다 얻은 경험치, 레벨 변화, 경험치 게이지"""
+    res = run.get("result") or {}
+    im, d = _canvas((48, 64, 104))
+    for y in range(0, H, 6):
+        d.line((0, y, W, y), fill=(56, 74, 116))
+    d.rectangle((0, 0, W, 19), fill=(32, 44, 76))
+    _text(d, (8, 3), "배틀 결과", font=BOLD, fill=(255, 220, 72), shadow=(16, 24, 40))
+    kind, foe = res.get("kind", "wild"), res.get("name", "")
+    if kind in ("wild", "legend"):
+        head = f"{foe}을(를) 잡았다!" if res.get("caught") else f"{foe}을(를) 쓰러뜨렸다!"
+    else:
+        head = f"{foe}에게 이겼다! 상금 {res.get('prize', 0):,}"
+    head, hf = _shrink(josa(head), W - 84, (SMALL, TINY))
+    _text(d, (W - 8 - _tw(head, hf), 5), head, font=hf, fill=(255, 255, 255), shadow=(16, 24, 40))
+    gains = res.get("gains", {})
+    cw, chh = (W - 12) // 2, (H - 26) // 3
+    for i in range(E.MAX_PARTY):
+        c, r = i % 2, i // 2
+        x0, y0 = 4 + c * (cw + 4), 23 + r * chh
+        x1, y1 = x0 + cw - 2, y0 + chh - 3
+        if i >= len(run["party"]):
+            d.rounded_rectangle((x0, y0, x1, y1), radius=5, outline=(88, 104, 144))
+            continue
+        m, g = run["party"][i], gains.get(str(i))
+        up = bool(g) and m["lv"] > g["lv0"]
+        d.rounded_rectangle((x0, y0, x1, y1), radius=5, fill=(255, 248, 220) if up else (248, 248, 240),
+                            outline=(216, 168, 72) if up else PANEL_EDGE, width=2 if up else 1)
+        ic = _icon(get_icon, get_sprite, m["sid"])
+        if m["hp"] <= 0:
+            ic = ic.convert("LA").convert("RGBA")
+        _put(im, d, ic, x0 + 20, y0 + 36, 34, 32)
+        name, nf = _shrink(D.name(m["sid"]), cw - 90, (BOLD, FONT, SMALL))
+        _text(d, (x0 + 40, y0 + 3 + (BOLD.size - nf.size) // 6), name, font=nf)
+        lv = f"Lv.{g['lv0']} → {m['lv']}" if up else f"Lv.{m['lv']}"
+        _text(d, (x1 - 5 - _tw(lv, SMALL if up else FONT), y0 + 4), lv, font=SMALL if up else FONT,
+              fill=(40, 152, 72) if up else INK)
+        if g and g["exp"]:
+            gain, col = f"+{g['exp']:,} EXP", (40, 104, 200)
+        elif m["hp"] <= 0:
+            gain, col = "기절해서 못 받았어요", (176, 64, 64)
+        elif m["lv"] >= E.level_cap(m):
+            gain, col = "레벨 제한 (말을 듣는 레벨)", (128, 96, 48)
+        elif not g:
+            gain, col = "이번 배틀 뒤에 들어왔어요", (112, 112, 128)
+        else:
+            gain, col = "+0 EXP", (112, 112, 128)
+        gain, gf = _shrink(gain, cw - 46, (FONT, SMALL, TINY))
+        _text(d, (x0 + 40, y0 + 17), gain, font=gf, fill=col)
+        need = E.exp_to_next(m)
+        _exp_gauge(d, x0 + 40, y0 + 31, cw - 48, (m["exp"] / need) if need else 1)
+        if up:
+            _text(d, (x0 + 4, y0 + 2), "▲", font=SMALL, fill=(40, 152, 72))
+    return _finish(im, d)
+
+
 # ---------- 트레이너 등장 ----------
 def trainer_intro(run: dict) -> bytes:
     """포켓몬이 나오기 전: 상대 트레이너가 서 있고, 대사가 나온다 (주인공은 뒷모습)"""

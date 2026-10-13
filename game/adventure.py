@@ -499,12 +499,15 @@ def after_ko(run: dict, rng: random.Random, caught: bool = False) -> list[str]:
     e = run["e"]
     mult = EXP_MULT * run.get("exp_mult", 1.0) * (1.0 if b["kind"] in ("wild", "legend") else TRAINER_EXP)
     msgs = []
-    for m in run["party"]:
+    gains = b.setdefault("gains", {})   # 배틀 결과 화면용: 파티 칸 → {"exp": 모은 경험치, "lv0": 처음 레벨}
+    for i, m in enumerate(run["party"]):
         if m["hp"] <= 0:
             continue
         amount = E.exp_gain(m, e, mult)
+        g = gains.setdefault(str(i), {"exp": 0, "lv0": m["lv"]})
         if m["lv"] < E.level_cap(m):
             msgs.append(f"{D.name(m['sid'])}은(는) 경험치 **{amount}**을(를) 얻었다!")
+            g["exp"] += amount
         msgs.extend(E.gain_exp(m, amount))
     if b.get("queue"):
         nxt = b["queue"].pop(0)
@@ -521,6 +524,13 @@ def after_ko(run: dict, rng: random.Random, caught: bool = False) -> list[str]:
         return msgs
     msgs.extend(_victory(run, rng, caught))
     return msgs
+
+
+def _result(run: dict, b: dict, caught: bool) -> dict:
+    """배틀이 끝나고 필드로 돌아올 때 한 번 보여줄 결과 (포켓몬마다 얻은 경험치·레벨)"""
+    foe = b.get("name") if b.get("kind") not in ("wild", "legend") else D.name(run["e"]["sid"])
+    return {"kind": b.get("kind", "wild"), "name": foe, "caught": caught, "prize": b.get("prize", 0),
+            "gains": b.get("gains", {})}
 
 
 def _victory(run: dict, rng: random.Random, caught: bool) -> list[str]:
@@ -583,6 +593,7 @@ def _victory(run: dict, rng: random.Random, caught: bool) -> list[str]:
                                 "포켓몬은 그대로 데려가지만, 성도에 들어가면 레벨이 Lv.8부터 다시 시작돼요.")
                     msgs.append("관동에서는 **이름없는동굴**과 **포켓몬저택**에서 강한 기운이 느껴진다...")
         if b.get("chain") and kind == "e4":   # 사천왕: 다음 방으로 가기 전에 가방으로 회복할 수 있다
+            run["result"] = _result(run, b, caught)
             _end_battle(run)
             run["chain"] = b["chain"]
             nxt = run["chain"][0]["name"]
@@ -596,6 +607,7 @@ def _victory(run: dict, rng: random.Random, caught: bool) -> list[str]:
             msgs.extend(_start_trainer(run, spec, rng, chain=rest))
             E._maybe_learn(run, "battle")
             return [x for x in msgs if x]
+    run["result"] = _result(run, b, caught)
     _end_battle(run)
     E._maybe_learn(run, "field")
     return msgs

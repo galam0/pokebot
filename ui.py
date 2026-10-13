@@ -609,6 +609,9 @@ def field_screen(uid: int, trainer: str, run: dict, image: bool = True) -> Scree
     region = A.region_of(run["loc"])
     embed.set_footer(text=f"{A.REGIONS[region]['n']} 배지 {len(A.region_badges(run, region))}/8 · 레벨 제한 {cap} · "
                           f"박스 {len(run['box'])}마리")
+    if run.get("result") and image:   # 배틀이 막 끝났으면 결과 (포켓몬마다 얻은 경험치)
+        embed.title = "🏅 배틀 결과 · " + embed.title
+        return Screen(embed, _frozen(view), "result")
     return Screen(embed, _frozen(view), "field", {"place": run.get("place") or "field"})
 
 
@@ -849,7 +852,9 @@ HELP = {   # 주제: (메뉴 이름, 이모지, 한 줄 설명, [(제목, 내용
         ("배틀 화면", "배틀 화면은 움직이는 그림(GIF)이에요. 1~5세대는 블랙·화이트처럼 움직이고, 6세대부터는 통통 뛰어요."),
     ]),
     "growth": ("성장·진화", "⬆️", "레벨업·기술·진화·물건", [
-        ("레벨업", "이기면 경험치를 받아요. 레벨이 오르면 기술을 배우는데, 기술이 4개면 잊을 기술을 직접 골라요."),
+        ("레벨업", "이기면 살아 있는 파티 포켓몬 모두가 경험치를 받아요 (배틀에 안 나온 포켓몬도, 기절한 포켓몬은 빼고). "
+                 "배틀이 끝나면 포켓몬마다 얻은 경험치와 레벨 변화를 보여 줘요. "
+                 "레벨이 오르면 기술을 배우는데, 기술이 4개면 잊을 기술을 직접 골라요."),
         ("진화", "레벨, 진화의 돌, 연결의끈(통신 진화)으로 진화해요. 친밀도·시간 진화는 Lv.25에 진화해요."),
         ("물건", "기술머신은 몇 번이고 쓸 수 있어요. 영양제·이상한사탕은 가방에서 쓰고, 지닌 물건은 배틀에서 효과가 나요."),
     ]),
