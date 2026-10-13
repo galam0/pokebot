@@ -13,6 +13,7 @@ import discord
 from game import adventure as A
 from game import data as D
 from game import engine as E
+from game import heroes as H
 from game import kanto as K
 from game.text import josa
 
@@ -80,9 +81,15 @@ REGIONS = {
 }
 
 
-def adventure_start_screen(uid, region: str = "관동") -> tuple[str, list[discord.Embed], discord.ui.View]:
-    """모험 시작: 오박사 연구소. 1~9세대 스타팅 27마리 중 하나 (지방을 고르면 그 지방 스타팅 3마리)"""
+HEROES_FILE = "heroes.png"
+
+
+def adventure_start_screen(uid, region: str = "관동", hero: str = H.DEFAULT,
+                           image: bool = False) -> tuple[str, list[discord.Embed], discord.ui.View]:
+    """모험 시작: 오박사 연구소. 주인공(역대 20명)과 1~9세대 스타팅 27마리 중 하나 (지방을 고르면 그 지방 스타팅 3마리)"""
     region = region if region in REGIONS else "관동"
+    hero = H.valid(hero)
+    _, hname, hgen, hgame = next(h for h in H.HEROES if h[0] == hero)
     embeds = [discord.Embed(
         title="🧪 오박사 연구소",
         description=("오박사: \"오오, 왔구나! 함께 떠날 포켓몬을 골라 보거라. 먼 지방에서 온 포켓몬도 있단다.\"\n\n"
@@ -91,11 +98,19 @@ def adventure_start_screen(uid, region: str = "관동") -> tuple[str, list[disco
                      "• 관동 챔피언이 되면 파티와 PC를 그대로 데리고 **성도 지방**으로 떠날 수 있어요.\n"
                      "• 배지가 늘수록 더 높은 레벨까지 말을 들어요. 지면 마지막 포켓몬센터로 돌아가요.\n"
                      "• 진행은 계속 저장되고, `/초기화`로 처음부터 다시 할 수 있어요.\n\n"
-                     f"아래 메뉴에서 지방을 바꾸면 다른 세대 스타팅도 고를 수 있어요. 지금: **{region}**"),
+                     f"주인공: **{hname}** ({hgen}세대 · {hgame}) — 아래 메뉴에서 역대 주인공 중에 고를 수 있어요. "
+                     "모험 중에도 `/주인공`으로 바꿀 수 있어요.\n"
+                     f"지방을 바꾸면 다른 세대 스타팅도 고를 수 있어요. 지금: **{region}**"),
         color=0x3BA55D)]
+    if image:
+        embeds[0].set_image(url=f"attachment://{HEROES_FILE}")
     view = discord.ui.View(timeout=None)
     view.add_item(discord.ui.Select(
-        custom_id=cid(uid, 0, "region"), placeholder="다른 지방 스타팅 보기", row=1,
+        custom_id=cid(uid, 0, "hero", region), placeholder="주인공 고르기", row=1,
+        options=[discord.SelectOption(label=f"{n}", value=k, default=k == hero, description=f"{g}세대 · {game}")
+                 for k, n, g, game in H.HEROES]))
+    view.add_item(discord.ui.Select(
+        custom_id=cid(uid, 0, "region", hero), placeholder="다른 지방 스타팅 보기", row=2,
         options=[discord.SelectOption(label=f"{i + 1}세대 · {r}", value=r, default=r == region,
                                       description=" / ".join(D.name(x) for x in ids))
                  for i, (r, ids) in enumerate(REGIONS.items())]))
@@ -107,7 +122,7 @@ def adventure_start_screen(uid, region: str = "관동") -> tuple[str, list[disco
         e.set_thumbnail(url=D.artwork(sid))
         embeds.append(e)
         view.add_item(discord.ui.Button(label=D.name(sid), style=discord.ButtonStyle.primary, row=0,
-                                        custom_id=cid(uid, 0, "starter", sid)))
+                                        custom_id=cid(uid, 0, "starter", f"{sid}.{hero}")))
     return "", embeds, _frozen(view)
 
 
@@ -139,6 +154,7 @@ def mode_start_screen(uid, mode: str, seed: str, starters: list[int]) -> tuple[s
 
 # ---------- 화면 ----------
 SCENE_FILE = "scene.png"
+SCENE_GIF = "scene.gif"   # 배틀 화면 (포켓몬이 움직임)
 SUMMARY_FILE = "summary.png"
 B = discord.ButtonStyle
 

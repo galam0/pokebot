@@ -10,11 +10,12 @@ import math
 from pathlib import Path
 from typing import Callable
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFont
 
 from . import data as D
 from . import adventure as A
 from . import engine as E
+from . import heroes as HR
 from . import hoenn as HO
 from . import johto as J
 from . import kanto as K
@@ -30,6 +31,7 @@ SMALL = ImageFont.truetype(str(_FONT_DIR / "NanumGothicBold.ttf"), 22)
 TITLE = ImageFont.truetype(str(_FONT_DIR / "NanumGothicExtraBold.ttf"), 52)
 
 SpriteGetter = Callable[[int, bool], Image.Image | None]   # (종 번호, 뒷모습?) -> 이미지
+TrainerGetter = Callable[[str], Image.Image | None]        # 주인공 키 -> 이미지
 
 TYPE_RGB = {
     1: (168, 167, 122), 2: (194, 46, 40), 3: (169, 143, 243), 4: (163, 62, 161), 5: (226, 191, 101),
@@ -65,15 +67,32 @@ def _canvas(color=(0, 0, 0)) -> tuple[Image.Image, ImageDraw.ImageDraw]:
     return im, d
 
 
-def _finish(im: Image.Image, d: ImageDraw.ImageDraw) -> bytes:
+def _layer() -> tuple[Image.Image, ImageDraw.ImageDraw]:
+    """투명한 위 칸 (배틀 GIF에서 스프라이트 위에 덮는 정보창·메시지 창)"""
+    im = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    d.texts = []
+    return im, d
+
+
+def _enlarge(im: Image.Image, d: ImageDraw.ImageDraw) -> Image.Image:
+    """3배로 키우고 모아 둔 글자를 쓴다"""
     big = im.resize((W * SCALE, H * SCALE), Image.NEAREST)
     bd = ImageDraw.Draw(big)
     for (x, y), s, font, fill, outline in d.texts:
         bd.text((x * SCALE, y * SCALE + 1), s, font=font, fill=fill,
                 stroke_width=3 if outline else 0, stroke_fill=outline)
+    return big
+
+
+def _png(big: Image.Image) -> bytes:
     buf = io.BytesIO()
     big.save(buf, "PNG", optimize=False, compress_level=6)
     return buf.getvalue()
+
+
+def _finish(im: Image.Image, d: ImageDraw.ImageDraw) -> bytes:
+    return _png(_enlarge(im, d))
 
 
 def _panel(d: ImageDraw.ImageDraw, box, fill=PANEL, edge=PANEL_EDGE, r=4):
@@ -312,31 +331,21 @@ def _mini_gauge(d, x, y, w, ratio):
             d.line((x0, y + 1 + i, fill_to, y + 1 + i), fill=col[k])
 
 
-def battle(run: dict, get_sprite: SpriteGetter | None = None, message: list[str] | None = None) -> bytes:
+def _battle_layers(run: dict, message: list[str] | None):
+    """배틀 화면을 (배경, 위 칸, 포켓몬 자리)로 나눠 그린다. 포켓몬은 그 사이에 붙인다 (GIF는 프레임마다)."""
     p, e, wave = E.lead(run), run["e"], run["wave"]
     adv = run.get("mode") == "adventure"
     biome = A.loc(run)["bg"] if adv else E.biome(wave)
     im, d = _canvas()
     _background(d, biome)
-
-    # 상대 (오른쪽 위)
-    _platform(d, 236, 86, 52, 12, biome)
+    _platform(d, 236, 86, 52, 12, biome)   # 상대 (오른쪽 위)
+    _platform(d, 78, 146, 60, 14, biome)   # 나 (왼쪽 아래, 뒷모습)
+    actors = []   # (종, 뒷모습?, 가운데 x, 발 y, 쓰러짐?)  — 작은 캔버스 좌표
     if e:
-        es = _sprite(get_sprite, e["sid"], False)
-        if e["hp"] <= 0:
-            es = es.convert("LA").convert("RGBA")   # 쓰러지면 흑백
-            es.putalpha(es.getchannel("A").point(lambda a: a // 2))
-        im.paste(es, (236 - es.width // 2, 88 - es.height), es)
-    # 나 (왼쪽 아래, 뒷모습)
-    _platform(d, 78, 146, 60, 14, biome)
-    ps = _sprite(get_sprite, p["sid"], True)
-    if p["hp"] <= 0:
-        ps = ps.convert("LA").convert("RGBA")   # 쓰러지면 흑백
-        ps.putalpha(ps.getchannel("A").point(lambda a: a // 2))
-    if ps.height < 80:   # 뒷모습은 조금 크게
-        ps = ps.resize((int(ps.width * 1.5), int(ps.height * 1.5)), Image.NEAREST)
-    im.paste(ps, (78 - ps.width // 2, 146 - ps.height + 6), ps)
+        actors.append((e["sid"], False, 236, 88, e["hp"] <= 0))
+    actors.append((p["sid"], True, 78, 152, p["hp"] <= 0))
 
+    ov, d = _layer()
     # 상대 정보창
     if e:
         _panel(d, (6, 8, 146, 48 if e.get("bars", 0) > 1 else 44))
@@ -397,12 +406,154 @@ def battle(run: dict, get_sprite: SpriteGetter | None = None, message: list[str]
 
     # 메시지 창
     _message_box(d, message if message is not None else _pick_lines(run))
-    return _finish(im, d)
+    base = im.resize((W * SCALE, H * SCALE), Image.NEAREST)
+    return base, _enlarge(ov, d), actors
+
+
+def _fainted(img: Image.Image) -> Image.Image:
+    """쓰러지면 흑백 + 반투명"""
+    img = img.convert("LA").convert("RGBA")
+    img.putalpha(img.getchannel("A").point(lambda a: a // 2))
+    return img
+
+
+def _actor_big(get_sprite, sid: int, back: bool, fainted: bool) -> Image.Image:
+    """멈춘 스프라이트를 큰 그림 크기로 (뒷모습은 조금 크게)"""
+    img = _sprite(get_sprite, sid, back)
+    if fainted:
+        img = _fainted(img)
+    if back and img.height < 80:
+        img = img.resize((int(img.width * 1.5), int(img.height * 1.5)), Image.NEAREST)
+    return img.resize((img.width * SCALE, img.height * SCALE), Image.NEAREST)
+
+
+def _paste_foot(canvas: Image.Image, img: Image.Image, cx: int, foot: int):
+    """발(아래 가운데)을 (cx, foot) 큰 그림 좌표에 맞춰 붙인다"""
+    canvas.paste(img, (cx - img.width // 2, foot - img.height), img)
+
+
+def battle(run: dict, get_sprite: SpriteGetter | None = None, message: list[str] | None = None) -> bytes:
+    base, over, actors = _battle_layers(run, message)
+    for sid, back, cx, foot, fainted in actors:
+        _paste_foot(base, _actor_big(get_sprite, sid, back, fainted), cx * SCALE, foot * SCALE)
+    base.paste(over, (0, 0), over)
+    return _png(base)
+
+
+AnimGetter = Callable[[int, bool], list | None]   # (종 번호, 뒷모습?) -> [(그림, ms)] 또는 None
+GIF_STEP = 60          # 프레임 간격 (ms)
+GIF_MAX_MS = 2400      # 한 바퀴 최대 길이
+GIF_IDLE_MS = 1200     # 움직이는 그림이 없을 때 숨쉬기 한 바퀴
+
+
+def _anim_big(frames: list, still: Image.Image) -> list[tuple[Image.Image, int]]:
+    """움직이는 스프라이트를 멈춘 그림과 비슷한 크기가 되도록 정수배로 키운다 (도트가 고르게)"""
+    h = max(f.height for f, _ in frames)
+    k = max(1, min(4, round(still.height / h))) if still.getbbox() else 2
+    return [(f.resize((f.width * k, f.height * k), Image.NEAREST), ms) for f, ms in frames]
+
+
+def _at(frames: list[tuple[Image.Image, int]], t: int) -> Image.Image:
+    t %= sum(ms for _, ms in frames)
+    for f, ms in frames:
+        if t < ms:
+            return f
+        t -= ms
+    return frames[-1][0]
+
+
+def _breathe(img: Image.Image, phase: float) -> tuple[Image.Image, int]:
+    """멈춘 그림에 숨쉬기 (살짝 늘었다 줄고 통통 뜀). (그림, 위로 뜬 높이)"""
+    s = math.sin(phase * 2 * math.pi)
+    w = max(1, round(img.width * (1 - 0.02 * s)))
+    h = max(1, round(img.height * (1 + 0.04 * s)))
+    lift = round(4 * max(0.0, math.sin(phase * 2 * math.pi + 0.6)))
+    return img.resize((w, h), Image.NEAREST), lift
+
+
+def battle_gif(run: dict, get_sprite: SpriteGetter | None = None, get_anim: AnimGetter | None = None,
+               message: list[str] | None = None) -> bytes:
+    """포켓몬이 움직이는 배틀 화면 GIF. 움직이는 스프라이트가 있으면 그걸, 없으면 멈춘 그림이 숨을 쉰다."""
+    base, over, actors = _battle_layers(run, message)
+    tracks = []   # (프레임 목록 또는 None, 멈춘 그림, cx, foot, 위상, 쓰러짐?)
+    for i, (sid, back, cx, foot, fainted) in enumerate(actors):
+        still = _actor_big(get_sprite, sid, back, fainted)
+        frames = None
+        if get_anim and not fainted:
+            try:
+                raw = get_anim(sid, back)
+            except Exception:
+                raw = None
+            if raw:
+                frames = _anim_big(raw, still)
+        tracks.append((frames, still, cx * SCALE, foot * SCALE, 0.5 * i, fainted))
+    loops = [sum(ms for _, ms in fr) for fr, *_ in tracks if fr]
+    total = min(GIF_MAX_MS, max(loops)) if loops else GIF_IDLE_MS
+    n = max(2, round(total / GIF_STEP))
+
+    # 프레임마다 (그림, cx, 발 y)
+    poses = []
+    for frames, still, cx, foot, phase, fainted in tracks:
+        row = []
+        for j in range(n):
+            t = j * GIF_STEP
+            if frames:
+                row.append((_at(frames, t), cx, foot))
+            elif fainted:
+                row.append((still, cx, foot))
+            else:
+                img, lift = _breathe(still, t / total + phase)
+                row.append((img, cx, foot - lift))
+        poses.append(row)
+
+    # 배경 + 위 칸은 한 번만 합치고, 프레임마다 포켓몬이 지나가는 칸만 다시 그린다
+    still_bg = base.copy()
+    still_bg.paste(over, (0, 0), over)
+    boxes = []
+    for row in poses:
+        xs0 = [cx - im.width // 2 for im, cx, _ in row]
+        ys0 = [f - im.height for im, _, f in row]
+        box = (max(0, min(xs0)), max(0, min(ys0)),
+               min(base.width, max(x + im.width for x, (im, _, _) in zip(xs0, row))),
+               min(base.height, max(f for _, _, f in row)))
+        boxes.append((box, base.crop(box), over.crop(box)))
+    rgb = []
+    for j in range(n):
+        fr = still_bg.copy()
+        for row, (box, bg, ov) in zip(poses, boxes):
+            img, cx, foot = row[j]
+            part = bg.copy()
+            part.paste(img, (cx - img.width // 2 - box[0], foot - img.height - box[1]), img)
+            part.paste(ov, (0, 0), ov)
+            fr.paste(part, box[:2])
+        rgb.append(fr)
+    return _gif(rgb, GIF_STEP)
+
+
+def _gif(frames: list[Image.Image], step: int) -> bytes:
+    """같은 팔레트로 줄이고, 앞 프레임과 같은 곳은 투명(255)으로 비워서 파일을 작게"""
+    sample = Image.new("RGB", (frames[0].width, frames[0].height * 3))
+    for k in range(3):
+        sample.paste(frames[len(frames) * k // 3], (0, frames[0].height * k))
+    pal = sample.quantize(255, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE)
+    out, prev = [], None
+    for fr in frames:
+        q = fr.quantize(palette=pal, dither=Image.Dither.NONE)
+        if prev is not None:
+            same = ImageChops.difference(fr, prev).convert("L").point(lambda v: 255 if v == 0 else 0)
+            q.paste(255, mask=same)
+        out.append(q)
+        prev = fr
+    buf = io.BytesIO()
+    out[0].save(buf, "GIF", save_all=True, append_images=out[1:], duration=step, loop=0,
+                transparency=255, disposal=1, optimize=False)
+    return buf.getvalue()
 
 
 def _pick_lines(run: dict) -> list[str]:
     import re
-    lines = [re.sub(r"\*\*|[⬆️✨🎁🗺️👑⚠️🏆🏳️→]", "", s).strip() for s in (run.get("log") or [])]
+    lines = [re.sub(r"\*\*|[\u2190-\u21ff\u2600-\u27bf\u2b00-\u2bff\ufe0f\U0001f000-\U0001faff]", "", s).strip()
+             for s in (run.get("log") or [])]
     lines = [s for s in lines if s]
     if run["phase"] == "reward":
         return (lines[-1:] if lines else []) + ["보상을 하나 고르세요!"]
@@ -705,7 +856,20 @@ def _facility_lines(run: dict) -> list[tuple[str, tuple]]:
     return out
 
 
-def field(run: dict, get_sprite: SpriteGetter | None = None) -> bytes:
+def _hero(get_trainer: TrainerGetter | None, key: str) -> Image.Image | None:
+    img = None
+    if get_trainer:
+        try:
+            img = get_trainer(key)
+        except Exception:
+            img = None
+    if img is None:
+        return None
+    bbox = img.getbbox()
+    return img.crop(bbox) if bbox else img
+
+
+def field(run: dict, get_sprite: SpriteGetter | None = None, get_trainer: TrainerGetter | None = None) -> bytes:
     L = A.loc(run)
     im, d = _canvas()
     _background(d, L["bg"])
@@ -713,11 +877,18 @@ def field(run: dict, get_sprite: SpriteGetter | None = None) -> bytes:
     _text(d, (8, 4), L["n"], font=BOLD, fill=(255, 232, 120), shadow=(16, 24, 40))
     money = f"₽{run.get('money', 0):,}"
     _text(d, (W - _tw(money) - 8, 6), money, fill=(255, 255, 255), shadow=(16, 24, 40))
-    # 왼쪽: 맨 앞 포켓몬
+    # 왼쪽: 주인공 + 맨 앞 포켓몬
     _platform(d, 56, 112, 44, 10, L["bg"])
+    hero = _hero(get_trainer, HR.of(run))
+    if hero:
+        hero.thumbnail((48, 80), Image.NEAREST)
+        im.paste(hero, (32 - hero.width // 2, 118 - hero.height), hero)
     if run["party"]:
         sp = _sprite(get_sprite, E.lead(run)["sid"], False)
-        im.paste(sp, (56 - sp.width // 2, 116 - sp.height), sp)
+        if hero:
+            sp.thumbnail((56, 64), Image.NEAREST)
+        cx = 76 if hero else 56
+        im.paste(sp, (cx - sp.width // 2, 116 - sp.height), sp)
     cap = "없음" if A.level_cap(run) >= E.MAX_LEVEL else f"Lv.{A.level_cap(run)}"
     tag = f"레벨 제한 {cap}" + (f" · 박스 {len(run['box'])}" if run.get("box") else "")
     _text(d, (8, 24), tag, font=SMALL, fill=(255, 255, 255), shadow=(16, 24, 40))
@@ -897,6 +1068,34 @@ def menu(info: dict, get_sprite: SpriteGetter | None = None) -> bytes:
         while _tw(desc, SMALL) > tw - 12 and len(desc) > 2:
             desc = desc[:-1]
         _text(d, (x0 + 7, 170), desc, font=SMALL, fill=(255, 255, 240), shadow=dark)
+    return _finish(im, d)
+
+
+# ---------- 주인공 고르기 ----------
+def heroes(selected: str, get_trainer: TrainerGetter | None = None) -> bytes:
+    """역대 주인공을 두 줄로 늘어놓고, 고른 주인공을 표시"""
+    im, d = _canvas()
+    _menu_bg(d)
+    sel = HR.valid(selected)
+    _, name, gen, game = next(h for h in HR.HEROES if h[0] == sel)
+    _text(d, (8, 3), "주인공 고르기", font=BOLD, fill=(255, 220, 72), shadow=(40, 32, 96))
+    info = f"{name} · {gen}세대 {game}"
+    _text(d, (W - _tw(info, BOLD) - 8, 3), info, font=BOLD, fill=(255, 255, 255), shadow=(40, 32, 96))
+    per_row = (len(HR.HEROES) + 1) // 2
+    cw = (W - 8) // per_row
+    for i, (key, *_rest) in enumerate(HR.HEROES):
+        row, col = divmod(i, per_row)
+        x0, y0 = 4 + col * cw, 20 + row * 86
+        if key == sel:
+            d.rounded_rectangle((x0, y0, x0 + cw - 2, y0 + 82), radius=3, fill=(255, 236, 160), outline=(232, 168, 48), width=2)
+        else:
+            d.rounded_rectangle((x0, y0, x0 + cw - 2, y0 + 82), radius=3, fill=(64, 84, 148))
+        img = _hero(get_trainer, key)
+        if img is None:   # 아직 못 받은 그림: 실루엣 자리
+            d.ellipse((x0 + 6, y0 + 20, x0 + cw - 8, y0 + 40), fill=(48, 60, 112))
+            continue
+        img.thumbnail((cw - 4, 78), Image.NEAREST)
+        im.paste(img, (x0 + (cw - 2) // 2 - img.width // 2, y0 + 80 - img.height), img)
     return _finish(im, d)
 
 
