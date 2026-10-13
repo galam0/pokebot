@@ -1,21 +1,35 @@
+"""PokeRogue식 포켓몬 디스코드 봇.
+
+/스타팅 → 지방·스타팅 선택 → 웨이브 배틀 → 보상 선택 → … → 쓰러지면 런 종료
+"""
+
+import asyncio
 import logging
 import os
+import random
 
-import aiohttp
-import aiosqlite
 import discord
 from aiohttp import web
 from discord import app_commands
 from dotenv import load_dotenv
 
+import storage
+import ui
+from game import engine as E
+
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
-DB_PATH = os.getenv("DB_PATH", "pokebot.db")
 
-# print 대신 logging 사용 → Render 로그에 바로 찍혀요
 log = logging.getLogger("pokebot")
+rng = random.Random()
 
 BUSY_MSG = "디스코드 연결이 잠시 불안정해요. 잠깐 뒤에 다시 시도해 주세요."
+
+# 참고: Render 무료 플랜의 공유 IP는 디스코드의 '응답 나중에 수정' 경로
+# (defer 후 edit_original_response / followup)가 Cloudflare에 막히는 일이 있어요.
+# 그래서 모든 응답을 interaction.response.* 로 '즉시' 보내고, defer는 쓰지 않아요.
+# 디스코드는 3초 안에 응답해야 하므로 버튼을 누를 때는 외부 API도 DB도 기다리지 않아요.
+# (런은 메모리에서 바로 처리하고, 응답을 보낸 뒤에 DB에 저장해요)
 
 
 def short_error(error: Exception) -> str:
@@ -23,239 +37,22 @@ def short_error(error: Exception) -> str:
     return str(error).split("\n", 1)[0][:200]
 
 
-# 참고: Render 무료 플랜의 공유 IP는 디스코드의 '응답 나중에 수정' 경로
-# (defer 후 edit_original_response / followup)가 Cloudflare에 막히는 일이 있어요.
-# 그래서 모든 응답을 interaction.response.* 로 '즉시' 보내고, defer는 쓰지 않아요.
-# 디스코드는 3초 안에 응답해야 하므로 클릭 시점에는 외부 API를 부르지 않아요.
-
-
-async def notify_failure(interaction: discord.Interaction):
-    """처리에 실패했을 때 사용자에게 안내한다. 이것도 막혔으면 조용히 넘어간다."""
+async def notify_failure(interaction: discord.Interaction, msg: str = BUSY_MSG):
     try:
         if not interaction.response.is_done():
-            await interaction.response.send_message(BUSY_MSG, ephemeral=True)
+            await interaction.response.send_message(msg, ephemeral=True)
     except Exception:
         pass
 
-# 세대별 스타팅 포켓몬 (전국도감 번호: 풀, 불꽃, 물 순서)
-STARTERS = {
-    "1세대 · 관동": [1, 4, 7],
-    "2세대 · 성도": [152, 155, 158],
-    "3세대 · 호연": [252, 255, 258],
-    "4세대 · 신오": [387, 390, 393],
-    "5세대 · 하나": [495, 498, 501],
-    "6세대 · 칼로스": [650, 653, 656],
-    "7세대 · 알로라": [722, 725, 728],
-    "8세대 · 가라르": [810, 813, 816],
-    "9세대 · 팔데아": [906, 909, 912],
-}
 
-# 스타팅 포켓몬 한국어 이름 (클릭할 때 PokeAPI를 기다리지 않도록 미리 넣어둠)
-KO_NAMES = {
-    1: "이상해씨", 4: "파이리", 7: "꼬부기",
-    152: "치코리타", 155: "브케인", 158: "리아코",
-    252: "나무지기", 255: "아차모", 258: "물짱이",
-    387: "모부기", 390: "불꽃숭이", 393: "팽도리",
-    495: "주리비얀", 498: "뚜꾸리", 501: "수댕이",
-    650: "도치마론", 653: "푸호꼬", 656: "개구마르",
-    722: "나몰빼미", 725: "냐오불", 728: "누리공",
-    810: "흥나숭", 813: "염버니", 816: "울머기",
-    906: "나오하", 909: "뜨아거", 912: "꾸왁스",
-}
-
-SPRITE_BASE = "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon"
-
-
-# ---------- PokeAPI ----------
-_info_cache: dict[int, dict] = {}
-
-
-def info_now(species_id: int) -> dict:
-    """네트워크 없이 바로 쓸 수 있는 정보 (캐시 → 고정 이름 → 번호)."""
-    if species_id in _info_cache:
-        return _info_cache[species_id]
-    return {
-        "name": KO_NAMES.get(species_id, f"#{species_id}"),
-        "image": f"{SPRITE_BASE}/other/official-artwork/{species_id}.png",
-    }
-
-
-async def get_info(species_id: int) -> dict:
-    """한국어 이름과 이미지 URL. 진화 후 포켓몬처럼 고정 목록에 없으면 PokeAPI에서 가져온다."""
-    info = info_now(species_id)
-    if species_id in _info_cache or species_id in KO_NAMES:
-        return info
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                f"https://pokeapi.co/api/v2/pokemon-species/{species_id}",
-                timeout=aiohttp.ClientTimeout(total=2),  # 디스코드 3초 제한 안에 끝나도록
-            ) as resp:
-                data = await resp.json()
-        info["name"] = next(
-            (n["name"] for n in data["names"] if n["language"]["name"] == "ko"),
-            data["name"],
-        )
-        _info_cache[species_id] = info
-    except Exception:
-        pass  # 이름만 번호로 표시하고 계속 진행
-    return info
-
-
-# ---------- DB ----------
-async def init_db():
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS pokemon (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                owner_id INTEGER NOT NULL,
-                species_id INTEGER NOT NULL,
-                nickname TEXT,
-                level INTEGER NOT NULL DEFAULT 5,
-                exp INTEGER NOT NULL DEFAULT 0,
-                friendship INTEGER NOT NULL DEFAULT 70,
-                is_partner INTEGER NOT NULL DEFAULT 1,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            )
-            """
-        )
-        await db.commit()
-
-
-async def get_partner(user_id: int):
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cur = await db.execute(
-            "SELECT * FROM pokemon WHERE owner_id = ? AND is_partner = 1 LIMIT 1",
-            (user_id,),
-        )
-        return await cur.fetchone()
-
-
-async def has_any_pokemon(user_id: int) -> bool:
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT 1 FROM pokemon WHERE owner_id = ? LIMIT 1", (user_id,)
-        )
-        return await cur.fetchone() is not None
-
-
-async def create_starter(user_id: int, species_id: int):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "INSERT INTO pokemon (owner_id, species_id) VALUES (?, ?)",
-            (user_id, species_id),
-        )
-        await db.commit()
-
-
-# ---------- 경험치 ----------
-# 스타팅 포켓몬은 본가 게임에서 모두 '중간 느림(Medium Slow)' 성장 그룹이에요.
-# DB의 exp는 '현재 레벨에서 모은 경험치'예요.
-MAX_LEVEL = 100
-
-
-def total_exp(level: int) -> int:
-    """Medium Slow: 레벨 n까지 필요한 누적 경험치 = 6/5·n³ − 15n² + 100n − 140"""
-    return max(0, (6 * level**3) // 5 - 15 * level**2 + 100 * level - 140)
-
-
-def exp_to_next(level: int) -> int:
-    """현재 레벨에서 다음 레벨까지 필요한 경험치"""
-    if level >= MAX_LEVEL:
-        return 0
-    return total_exp(level + 1) - total_exp(level)
-
-
-def exp_bar(current: int, need: int, width: int = 10) -> str:
-    if need <= 0:
-        return "▰" * width
-    filled = min(width, current * width // need)
-    return "▰" * filled + "▱" * (width - filled)
-
-
-# ---------- UI ----------
-class OwnerView(discord.ui.View):
-    """명령어를 실행한 본인만 조작할 수 있는 View"""
-
-    def __init__(self, owner_id: int):
-        super().__init__(timeout=180)
-        self.owner_id = owner_id
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.owner_id:
-            await interaction.response.send_message(
-                "본인이 연 선택창만 사용할 수 있어요.", ephemeral=True
-            )
-            return False
-        return True
-
-    async def on_error(self, interaction: discord.Interaction, error: Exception, item):
-        log.warning("선택창 처리 실패 (%s): %s", type(item).__name__, short_error(error))
-        await notify_failure(interaction)
-
-
-class GenSelect(discord.ui.Select):
-    def __init__(self):
-        super().__init__(
-            placeholder="지방을 골라주세요",
-            options=[discord.SelectOption(label=g, value=g) for g in STARTERS],
-        )
-
-    async def callback(self, interaction: discord.Interaction):
-        ids = STARTERS[self.values[0]]
-        infos = [info_now(i) for i in ids]
-
-        embeds = [
-            discord.Embed(title=info["name"], color=discord.Color.blurple()).set_thumbnail(
-                url=info["image"]
-            )
-            for info in infos
-        ]
-        view = StarterView(interaction.user.id, ids, infos)
-        await interaction.response.edit_message(
-            content=f"**{self.values[0]}** 스타팅 포켓몬이에요. 함께할 파트너를 골라주세요!",
-            embeds=embeds,
-            view=view,
-        )
-
-
-class GenView(OwnerView):
-    def __init__(self, owner_id: int):
-        super().__init__(owner_id)
-        self.add_item(GenSelect())
-
-
-class StarterButton(discord.ui.Button):
-    def __init__(self, species_id: int, info: dict):
-        super().__init__(label=info["name"], style=discord.ButtonStyle.primary)
-        self.species_id = species_id
-        self.info = info
-
-    async def callback(self, interaction: discord.Interaction):
-        # 중복 선택 방지 (버튼을 연타하거나 창을 여러 개 연 경우)
-        if await has_any_pokemon(interaction.user.id):
-            await interaction.response.edit_message(
-                content="이미 파트너 포켓몬이 있어요!", embeds=[], view=None
-            )
-            return
-
-        await create_starter(interaction.user.id, self.species_id)
-        embed = discord.Embed(
-            title=f"{self.info['name']}, 너로 정했다!",
-            description=f"{interaction.user.display_name} 트레이너의 첫 파트너가 되었어요.\n`/내포켓몬`으로 상태를 확인해 보세요.",
-            color=discord.Color.green(),
-        )
-        embed.set_image(url=self.info["image"])
-        await interaction.response.edit_message(content=None, embeds=[embed], view=None)
-
-
-class StarterView(OwnerView):
-    def __init__(self, owner_id: int, ids: list[int], infos: list[dict]):
-        super().__init__(owner_id)
-        for species_id, info in zip(ids, infos):
-            self.add_item(StarterButton(species_id, info))
+def _bg(coro, what: str):
+    """응답을 보낸 뒤 DB 저장을 백그라운드로 실행 (실패하면 로그만)"""
+    async def runner():
+        try:
+            await coro
+        except Exception as e:
+            log.warning("%s 실패: %s", what, short_error(e))
+    asyncio.create_task(runner())
 
 
 # ---------- Health check (Render 웹 서비스는 포트를 열어두어야 해요) ----------
@@ -283,10 +80,9 @@ class PokeBot(discord.Client):
 
     async def setup_hook(self):
         await start_health_server()
-        await init_db()
+        await storage.init()
 
     # 전역 등록은 반영이 느려서, 봇이 들어가 있는 서버마다 '서버 전용'으로 등록해요.
-    # → 어느 서버든 몇 초 안에 명령어가 생겨요.
     async def sync_guild(self, guild: discord.abc.Snowflake) -> int:
         self.tree.copy_global_to(guild=guild)
         synced = await self.tree.sync(guild=guild)
@@ -294,14 +90,14 @@ class PokeBot(discord.Client):
 
     async def on_ready(self):
         log.info("로그인: %s / 서버 %d곳", self.user, len(self.guilds))
-        if getattr(self, "_synced", False):  # 재연결 때마다 다시 하지 않음
+        if getattr(self, "_synced", False):
             return
         self._synced = True
         for guild in self.guilds:
             try:
                 count = await self.sync_guild(guild)
                 log.info("명령어 %d개 동기화: %s", count, guild.name)
-            except Exception as e:  # 한 서버가 실패해도 나머지는 계속
+            except Exception as e:
                 log.warning("명령어 동기화 실패 (%s): %s", guild.name, short_error(e))
 
     async def on_guild_join(self, guild: discord.Guild):
@@ -311,10 +107,116 @@ class PokeBot(discord.Client):
         except Exception as e:
             log.warning("새 서버 명령어 등록 실패 (%s): %s", guild.name, short_error(e))
 
+    async def on_interaction(self, interaction: discord.Interaction):
+        if interaction.type != discord.InteractionType.component:
+            return
+        custom_id = (interaction.data or {}).get("custom_id", "")
+        if not custom_id.startswith("pr:"):
+            return
+        try:
+            await handle_component(interaction, custom_id)
+        except Exception as e:
+            log.exception("버튼 처리 실패 (%s): %s", custom_id, short_error(e))
+            await notify_failure(interaction)
+
 
 bot = PokeBot()
 
 
+# ---------- 버튼 처리 ----------
+async def show_battle(interaction: discord.Interaction, run: dict):
+    embed, view = ui.battle_screen(interaction.user.id, interaction.user.display_name, run)
+    await interaction.response.edit_message(content=None, embeds=[embed], view=view)
+
+
+async def handle_component(interaction: discord.Interaction, custom_id: str):
+    parts = custom_id.split(":")
+    _, uid, ver, act = parts[:4]
+    arg = parts[4] if len(parts) > 4 else ""
+    uid, ver = int(uid), int(ver)
+    user = interaction.user
+    if user.id != uid:
+        await interaction.response.send_message("다른 트레이너의 화면이에요. `/스타팅`으로 직접 모험을 시작해 보세요!", ephemeral=True)
+        return
+
+    async with storage.lock(uid):
+        run = await storage.get_run(uid)
+
+        # --- 스타팅 고르기 (런이 없을 때) ---
+        if act in ("region", "regions", "starter", "new"):
+            if run and run["phase"] in ("battle", "reward"):
+                await show_battle(interaction, run)   # 이미 진행 중인 런이 있으면 그 화면으로
+                return
+            if act == "region":
+                region = (interaction.data.get("values") or [""])[0]
+                content, embeds, view = ui.starter_screen(uid, region)
+            elif act == "starter":
+                run = E.new_run(int(arg), rng)
+                run["ver"] = 1
+                storage.cache_run(uid, run)
+                await show_battle(interaction, run)
+                _bg(storage.save_run(uid, run), "런 저장")
+                log.info("새 런: %s → %s", user, run["starter"])
+                return
+            else:
+                content, embeds, view = ui.region_screen(uid)
+            await interaction.response.edit_message(content=content or None, embeds=embeds, view=view)
+            return
+
+        if not run:
+            await interaction.response.edit_message(content="이 런은 이미 끝났어요. `/스타팅`으로 새로 시작해 보세요.",
+                                                    embeds=[], view=None)
+            return
+
+        # --- 상세 정보는 버전과 상관없이 보여줌 ---
+        if act == "info":
+            await interaction.response.send_message(embed=ui.mon_detail(user.display_name, run), ephemeral=True)
+            return
+
+        if ver != run.get("ver", 0):
+            await interaction.response.send_message(
+                "지나간 화면의 버튼이에요. 최신 화면에서 눌러 주세요. 화면을 잃어버렸다면 `/이어하기`를 써 보세요.",
+                ephemeral=True)
+            return
+
+        if act == "quit":
+            embed, _ = ui.battle_screen(uid, user.display_name, run)
+            embed.add_field(name="🏳️ 정말 포기할까요?", value="포기하면 이번 런은 여기서 끝나고 기록만 남아요.", inline=False)
+            await interaction.response.edit_message(embeds=[embed], view=ui.quit_confirm(uid, run["ver"]))
+            return
+        if act == "back":
+            await show_battle(interaction, run)
+            return
+
+        if act == "quitok":
+            run["log"] = ["🏳️ 런을 포기했다."]
+            run["phase"] = "over"
+        elif act == "move" and run["phase"] == "battle":
+            idx = int(arg)
+            if not run["p"]["rc"] and not 0 <= idx < len(run["p"]["moves"]):
+                return await notify_failure(interaction, "그 기술은 이제 없어요.")
+            E.take_turn(run, idx, rng)
+        elif act == "reward" and run["phase"] == "reward":
+            E.choose_reward(run, int(arg), rng)
+        elif act == "skip" and run["phase"] == "reward":
+            E.skip_reward(run, rng)
+        else:
+            await show_battle(interaction, run)
+            return
+
+        run["ver"] = run.get("ver", 0) + 1
+        await show_battle(interaction, run)
+
+        if run["phase"] in ("over", "clear"):
+            cleared = run["wave"] if run["phase"] == "clear" else run["wave"] - 1
+            storage.cache_run(uid, None)
+            _bg(storage.finish_run(uid, user.display_name, run, cleared, run["phase"] == "clear"), "런 기록")
+            log.info("런 종료: %s %d웨이브", user, cleared)
+        else:
+            _bg(storage.save_run(uid, run), "런 저장")
+
+
+# ---------- 명령어 ----------
 @bot.tree.error
 async def on_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
     cmd = interaction.command.name if interaction.command else "?"
@@ -322,48 +224,51 @@ async def on_command_error(interaction: discord.Interaction, error: app_commands
     await notify_failure(interaction)
 
 
-@bot.tree.command(name="스타팅", description="스타팅 포켓몬을 골라 모험을 시작해요")
+@bot.tree.command(name="스타팅", description="스타팅 포켓몬을 골라 새 런(모험)을 시작해요")
 async def start(interaction: discord.Interaction):
-    if await has_any_pokemon(interaction.user.id):
+    uid = interaction.user.id
+    run = await storage.get_run(uid)
+    if run and run["phase"] in ("battle", "reward"):
+        embed, view = ui.battle_screen(uid, interaction.user.display_name, run)
         await interaction.response.send_message(
-            "이미 파트너 포켓몬이 있어요! `/내포켓몬`으로 확인해 보세요.", ephemeral=True
-        )
+            content="진행 중인 런이 있어요! 이어서 하거나, 🏳️ 포기 후 새로 시작할 수 있어요.", embed=embed, view=view)
         return
-    await interaction.response.send_message(
-        "어느 지방의 스타팅 포켓몬과 함께할까요?",
-        view=GenView(interaction.user.id),
-        ephemeral=True,
-    )
+    content, embeds, view = ui.region_screen(uid)
+    await interaction.response.send_message(content=content or None, embeds=embeds, view=view)
 
 
-@bot.tree.command(name="내포켓몬", description="내 파트너 포켓몬의 상태를 확인해요")
+@bot.tree.command(name="이어하기", description="진행 중인 런 화면을 다시 불러와요")
+async def resume(interaction: discord.Interaction):
+    uid = interaction.user.id
+    run = await storage.get_run(uid)
+    if not run or run["phase"] not in ("battle", "reward"):
+        await interaction.response.send_message("진행 중인 런이 없어요. `/스타팅`으로 시작해 보세요!", ephemeral=True)
+        return
+    embed, view = ui.battle_screen(uid, interaction.user.display_name, run)
+    await interaction.response.send_message(embed=embed, view=view)
+
+
+@bot.tree.command(name="내포켓몬", description="이번 런에서 함께하는 포켓몬의 능력치와 기술을 봐요")
 async def my_pokemon(interaction: discord.Interaction):
-    row = await get_partner(interaction.user.id)
-    if row is None:
-        await interaction.response.send_message(
-            "아직 파트너가 없어요. `/스타팅`으로 스타팅 포켓몬을 골라보세요!", ephemeral=True
-        )
+    run = await storage.get_run(interaction.user.id)
+    if not run:
+        await interaction.response.send_message("진행 중인 런이 없어요. `/스타팅`으로 시작해 보세요!", ephemeral=True)
         return
+    await interaction.response.send_message(embed=ui.mon_detail(interaction.user.display_name, run))
 
-    info = await get_info(row["species_id"])
-    name = row["nickname"] or info["name"]
 
-    embed = discord.Embed(title=name, color=discord.Color.gold())
-    level, exp = row["level"], row["exp"]
-    need = exp_to_next(level)
-    embed.add_field(name="레벨", value=f"Lv.{level}")
-    embed.add_field(name="친밀도", value=f"{row['friendship']} / 255")
-    if need:
-        exp_text = f"{exp_bar(exp, need)}\n{exp} / {need}  ·  레벨업까지 **{need - exp}** 남음"
-    else:
-        exp_text = "최고 레벨이에요!"
-    embed.add_field(name=f"경험치 (Lv.{level} → {level + 1})" if need else "경험치", value=exp_text, inline=False)
-    embed.set_image(url=info["image"])
-    embed.set_footer(text=f"{interaction.user.display_name} 트레이너의 파트너")
-    await interaction.response.send_message(embed=embed)
+@bot.tree.command(name="기록", description="내 최고 기록과 랭킹을 봐요")
+async def records(interaction: discord.Interaction):
+    try:
+        trainer, top = await asyncio.wait_for(
+            asyncio.gather(storage.get_trainer(interaction.user.id), storage.leaderboard(10)), timeout=2.5)
+    except asyncio.TimeoutError:
+        await interaction.response.send_message("기록을 불러오는 중이에요. 잠깐 뒤에 다시 시도해 주세요.", ephemeral=True)
+        return
+    await interaction.response.send_message(embed=ui.records(trainer, top, interaction.user.id))
 
 
 if __name__ == "__main__":
     if not TOKEN:
         raise SystemExit("DISCORD_TOKEN 환경변수를 설정해 주세요 (.env 파일 참고)")
-    bot.run(TOKEN, root_logger=True)  # pokebot 로그도 discord 로그와 같이 출력
+    bot.run(TOKEN, root_logger=True)
