@@ -1,10 +1,12 @@
-"""파이어레드 디컴파일(pret/pokefirered)의 맵 데이터로 실제 게임 맵 그림을 만든다.
+"""파이어레드·에메랄드 디컴파일(pret/pokefirered, pret/pokeemerald)의 맵 데이터로 실제 게임 맵 그림을 만든다.
 
     git clone --depth 1 --filter=blob:none --sparse https://github.com/pret/pokefirered
-    (cd pokefirered && git sparse-checkout set data/layouts data/tilesets graphics/object_events/pics/people)
+    (cd pokefirered && git sparse-checkout set data/layouts data/tilesets)
     python tools/render_maps.py <pokefirered 경로>
+    python tools/render_maps.py <pokeemerald 경로> emerald     # 호연 (data/maps도 필요)
 
-결과: assets/maps/<레이아웃>.png (16px 블록 그대로). 사람 그림·장면 정보는 tools/build_places.py
+결과: assets/maps/<레이아웃>.png, 에메랄드는 assets/maps/em/<레이아웃>.png (16px 블록 그대로).
+사람 그림·장면 정보는 tools/build_places.py
 """
 import json
 import re
@@ -16,10 +18,9 @@ from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT_MAPS = ROOT / "assets" / "maps"
-OUT_PEOPLE = ROOT / "assets" / "people"
-NUM_TILES_PRIMARY = 640
-NUM_METATILES_PRIMARY = 640
-NUM_PALS_PRIMARY = 7
+# (첫 타일셋 타일 수, 메타타일 수, 팔레트 수)
+FIRERED = (640, 640, 7)
+EMERALD = (512, 512, 6)
 
 # 우리 게임 장소 → 디컴파일 레이아웃 이름 (안쪽 화면은 공용 레이아웃)
 LAYOUTS = [
@@ -33,11 +34,6 @@ LAYOUTS = [
     "VermilionCity_Gym", "CeladonCity_Gym", "FuchsiaCity_Gym", "SaffronCity_Gym", "CinnabarIsland_Gym",
     "ViridianCity_Gym", "CeladonCity_DepartmentStore_1F", "PalletTown_PlayersHouse_1F", "IndigoPlateau_PokemonCenter_1F",
 ]
-PEOPLE = ["red_normal", "green_normal", "nurse", "clerk", "prof_oak", "blue", "mom", "brock", "misty", "lt_surge",
-          "erika", "koga", "sabrina", "blaine", "giovanni", "lorelei", "bruno", "agatha", "lance",
-          "youngster", "lass", "bug_catcher", "hiker", "gentleman", "rocket_m", "rocket_f", "cooltrainer_m",
-          "cooltrainer_f", "fisher", "swimmer_m_land", "swimmer_f_land", "scientist", "channeler", "biker",
-          "black_belt", "camper", "picnicker", "sailor", "beauty", "super_nerd", "gym_guy", "old_man_1", "woman_1"]
 
 
 def snake(name: str) -> str:
@@ -74,7 +70,8 @@ class Tileset:
         return [[self.idx[tx + x, ty + y] for x in range(8)] for y in range(8)]
 
 
-def render_layout(src: Path, layout: dict) -> Image.Image:
+def render_layout(src: Path, layout: dict, consts=FIRERED) -> Image.Image:
+    NUM_TILES_PRIMARY, NUM_METATILES_PRIMARY, NUM_PALS_PRIMARY = consts
     prim = Tileset(tileset_dir(src, layout["primary_tileset"]))
     sec = Tileset(tileset_dir(src, layout["secondary_tileset"]))
     pals = prim.pals[:NUM_PALS_PRIMARY] + sec.pals[NUM_PALS_PRIMARY:]
@@ -120,20 +117,29 @@ def render_layout(src: Path, layout: dict) -> Image.Image:
 
 def main():
     src = Path(sys.argv[1])
-    OUT_MAPS.mkdir(parents=True, exist_ok=True)
+    emerald = len(sys.argv) > 2 and sys.argv[2] == "emerald"
+    out = OUT_MAPS / "em" if emerald else OUT_MAPS
+    out.mkdir(parents=True, exist_ok=True)
     table = json.loads((src / "data/layouts/layouts.json").read_text())["layouts"]
     by_name = {l["name"].removesuffix("_Layout"): l for l in table if "name" in l}
-    for name in LAYOUTS:
+    names = LAYOUTS
+    if emerald:   # 호연 장면에 쓰는 맵들의 레이아웃
+        sys.path.insert(0, str(ROOT / "tools"))
+        from build_places import hoenn_maps
+        by_id = {l["id"]: l for l in table if "id" in l}
+        names = sorted({by_id[json.loads((src / "data/maps" / m / "map.json").read_text())["layout"]]["name"]
+                        .removesuffix("_Layout") for m in hoenn_maps(src)})
+    for name in names:
         lay = by_name.get(name)
         if not lay:
             print("없음:", name)
             continue
         try:
-            img = render_layout(src, lay)
+            img = render_layout(src, lay, EMERALD if emerald else FIRERED)
         except FileNotFoundError as e:
             print("건너뜀:", name, e)
             continue
-        img.save(OUT_MAPS / f"{name}.png", optimize=True)
+        img.save(out / f"{name}.png", optimize=True)
         print(name, img.size)
     # 사람 그림(걷는 그림 세 방향)은 tools/build_places.py가 만든다
 

@@ -4,8 +4,8 @@
     (cd pokefirered && git sparse-checkout set data/maps data/layouts graphics/object_events/pics/people \
         graphics/pokemon_storage)
     git clone --depth 1 --filter=blob:none --sparse https://github.com/pret/pokeemerald
-    (cd pokeemerald && git sparse-checkout set graphics/object_events/pics/people/brendan \
-        graphics/object_events/pics/people/may)
+    (cd pokeemerald && git sparse-checkout set data/maps data/layouts data/tilesets graphics/object_events/pics/people)
+    python tools/render_maps.py <pokeemerald 경로> emerald   # 호연 맵 그림 먼저
     python tools/build_places.py <pokefirered 경로> <pokeemerald 경로>
 
 결과
@@ -47,8 +47,28 @@ INDOOR = {   # 장소 키 → {장면: 맵}
 TOWNS = {"viridian": "ViridianCity", "pewter": "PewterCity", "cerulean": "CeruleanCity",
          "vermilion": "VermilionCity", "lavender": "LavenderTown", "celadon": "CeladonCity",
          "fuchsia": "FuchsiaCity", "saffron": "SaffronCity", "cinnabar": "CinnabarIsland"}
-LEADERS = {"BROCK", "MISTY", "LT_SURGE", "ERIKA", "KOGA", "SABRINA", "BLAINE", "GIOVANNI"}
-SERVICE = {"NURSE", "CLERK"}   # 카운터 너머라 두 칸 앞에 선다
+LEADERS = {"BROCK", "MISTY", "LT_SURGE", "ERIKA", "KOGA", "SABRINA", "BLAINE", "GIOVANNI",
+           "ROXANNE", "BRAWLY", "WATTSON", "FLANNERY", "NORMAN", "WINONA", "TATE", "LIZA", "JUAN"}
+SERVICE = {"NURSE", "CLERK", "MART_EMPLOYEE"}   # 카운터 너머라 두 칸 앞에 선다
+
+# 호연 (에메랄드): 장소 키 → 바깥 맵, 센터·숍·체육관이 있는 마을 이름
+HOENN_OUTDOOR = {
+    "h_ferry": "SSTidalCorridor", "littleroot": "LittlerootTown", "h_route101": "Route101", "oldale": "OldaleTown",
+    "h_route102": "Route102", "petalburg": "PetalburgCity", "h_woods": "PetalburgWoods", "rustboro": "RustboroCity",
+    "h_tunnel": "RusturfTunnel", "h_boat": "Route106", "dewford": "DewfordTown", "granite": "GraniteCave_1F",
+    "h_route109": "Route109", "slateport": "SlateportCity", "h_route110": "Route110", "mauville": "MauvilleCity",
+    "verdanturf": "VerdanturfTown", "h_route111": "Route111", "chimney": "MtChimney", "lavaridge": "LavaridgeTown",
+    "fallarbor": "FallarborTown", "meteor": "MeteorFalls_1F_1R", "h_route119": "Route119", "fortree": "FortreeCity",
+    "h_route120": "Route120", "pyre": "MtPyre_1F", "lilycove": "LilycoveCity", "aquahideout": "AquaHideout_1F",
+    "h_route124": "Route124", "mossdeep": "MossdeepCity", "seafloor": "SeafloorCavern_Entrance",
+    "sootopolis": "SootopolisCity", "origin": "CaveOfOrigin_Entrance", "h_route128": "Route128",
+    "pacifidlog": "PacifidlogTown", "skypillar": "SkyPillar_Outside", "sealed": "SealedChamber_OuterRoom",
+    "h_victory": "VictoryRoad_1F", "evergrande": "EverGrandeCity",
+}
+HOENN_TOWNS = {k: v for k, v in HOENN_OUTDOOR.items() if v.endswith(("Town", "City"))}
+HOENN_INDOOR = {"littleroot": {"home": "LittlerootTown_BrendansHouse_1F"},
+                "evergrande": {"center": "EverGrandeCity_PokemonLeague_1F", "mart": "EverGrandeCity_PokemonLeague_1F"},
+                "lilycove": {"mart": "LilycoveCity_DepartmentStore_1F"}}
 FACE = {"MOVEMENT_TYPE_FACE_DOWN": "down", "MOVEMENT_TYPE_FACE_UP": "up", "MOVEMENT_TYPE_FACE_LEFT": "left",
         "MOVEMENT_TYPE_FACE_RIGHT": "right"}
 STEP = {"down": (0, 1), "up": (0, -1), "left": (-1, 0), "right": (1, 0)}
@@ -59,6 +79,18 @@ EXTRA_PEOPLE = ["boy", "fat_man", "old_man_1", "woman_1", "woman_2", "woman_3", 
 
 def snake_to_file(gfx: str) -> str:
     return gfx.removeprefix("OBJ_EVENT_GFX_").lower()
+
+
+def hoenn_maps(em: Path) -> list[str]:
+    """호연 장면에 쓰는 에메랄드 맵 이름 (tools/render_maps.py emerald도 이걸로 그린다)"""
+    names = list(HOENN_OUTDOOR.values())
+    for key, town in HOENN_TOWNS.items():
+        for suffix in ("PokemonCenter_1F", "Mart", "Gym"):
+            if (em / "data/maps" / f"{town}_{suffix}").exists():
+                names.append(f"{town}_{suffix}")
+    for d in HOENN_INDOOR.values():
+        names.extend(d.values())
+    return sorted(set(names))
 
 
 def load_map(src: Path, name: str) -> dict:
@@ -88,7 +120,7 @@ def walkable_near(col, x0, y0, taken) -> tuple[int, int]:
     return (best[1], best[2]) if best else (x0, y0)
 
 
-def scene_of(src: Path, layouts: dict, map_name: str, kind: str, have: set[str]) -> dict:
+def scene_of(src: Path, layouts: dict, map_name: str, kind: str, have: set[str], prefix: str = "") -> dict:
     m = load_map(src, map_name)
     lay = layout_of(src, layouts, m)
     col = collisions(src, lay)
@@ -96,12 +128,12 @@ def scene_of(src: Path, layouts: dict, map_name: str, kind: str, have: set[str])
     for o in objs:
         g = o.get("graphics_id", "")
         f = snake_to_file(g)
-        if f in have and isinstance(o.get("x"), int):
-            npcs.append([f, o["x"], o["y"], FACE.get(o.get("movement_type"), "down")])
+        if prefix + f in have and isinstance(o.get("x"), int):
+            npcs.append([prefix + f, o["x"], o["y"], FACE.get(o.get("movement_type"), "down")])
     taken = {(n[1], n[2]) for n in npcs}
     player = None
     if kind in ("center", "mart", "gym", "home"):
-        want = {"center": {"NURSE"}, "mart": {"CLERK", "WORKER_F"}, "gym": LEADERS, "home": {"MOM"}}[kind]
+        want = {"center": {"NURSE"}, "mart": {"CLERK", "WORKER_F", "MART_EMPLOYEE"}, "gym": LEADERS, "home": {"MOM"}}[kind]
         for o in objs:
             g = o.get("graphics_id", "").removeprefix("OBJ_EVENT_GFX_")
             if g in want:
@@ -112,19 +144,38 @@ def scene_of(src: Path, layouts: dict, map_name: str, kind: str, have: set[str])
                 break
     elif kind == "field":
         doors = [w for w in m.get("warp_events", []) if "POKEMON_CENTER_1F" in w["dest_map"]] or \
-                [w for w in m.get("warp_events", []) if "PLAYERS_HOUSE_1F" in w["dest_map"]]
+                [w for w in m.get("warp_events", []) if "PLAYERS_HOUSE_1F" in w["dest_map"]
+                 or "BRENDANS_HOUSE_1F" in w["dest_map"]]
         if doors:
             player = [doors[0]["x"], doors[0]["y"] + 1, "up"]
     if player is None:   # 맵 가운데에서 가장 가까운 걸을 수 있는 칸
         x, y = walkable_near(col, lay["width"] // 2, lay["height"] // 2, taken)
         player = [x, y, "down"]
     npcs = [n for n in npcs if (n[1], n[2]) != (player[0], player[1])]
-    return {"map": lay["name"].removesuffix("_Layout"), "w": lay["width"], "h": lay["height"], "player": player,
-            "npcs": npcs}
+    return {"map": prefix + lay["name"].removesuffix("_Layout"), "w": lay["width"], "h": lay["height"],
+            "player": player, "npcs": npcs}
+
+
+def strip_of(f: Path) -> Image.Image:
+    """걷는 그림 시트 → [아래, 위, 왼쪽] 세 칸 (배경색은 투명)"""
+    sheet = Image.open(f)
+    bg = sheet.convert("RGBA").getpixel((0, 0))
+    sheet = sheet.convert("RGBA")
+    fw = sheet.width // 9 if sheet.width % 9 == 0 else (16 if sheet.height == 32 else sheet.height)
+    n = sheet.width // fw
+    frames = [sheet.crop((i * fw, 0, i * fw + fw, sheet.height)) for i in (0, 1, 2) if i < n]
+    while len(frames) < 3:
+        frames.append(frames[0])
+    strip = Image.new("RGBA", (fw * 3, sheet.height), (0, 0, 0, 0))
+    for i, fr_im in enumerate(frames):
+        data = [(0, 0, 0, 0) if px[:3] == bg[:3] else px for px in fr_im.getdata()]
+        fr_im.putdata(data)
+        strip.paste(fr_im, (i * fw, 0))
+    return strip
 
 
 def people(fr: Path, em: Path) -> set[str]:
-    """걷는 그림에서 [아래, 위, 왼쪽] 세 칸만 뽑아 둔다"""
+    """관동 사람들 (파이어레드) + 에메랄드 주인공 둘"""
     OUT_PEOPLE.mkdir(parents=True, exist_ok=True)
     sources = {f.stem: f for f in (fr / "graphics/object_events/pics/people").glob("*.png")}
     sources["brendan"] = em / "graphics/object_events/pics/people/brendan/walking.png"
@@ -136,21 +187,25 @@ def people(fr: Path, em: Path) -> set[str]:
         if not f or not f.exists():
             print("사람 없음:", name)
             continue
-        sheet = Image.open(f)
-        bg = sheet.convert("RGBA").getpixel((0, 0))
-        sheet = sheet.convert("RGBA")
-        fw = 16 if sheet.height == 32 else sheet.height
-        n = sheet.width // fw
-        frames = [sheet.crop((i * fw, 0, i * fw + fw, sheet.height)) for i in (0, 1, 2) if i < n]
-        while len(frames) < 3:
-            frames.append(frames[0])
-        strip = Image.new("RGBA", (fw * 3, sheet.height), (0, 0, 0, 0))
-        for i, fr_im in enumerate(frames):
-            data = [(0, 0, 0, 0) if px[:3] == bg[:3] else px for px in fr_im.getdata()]
-            fr_im.putdata(data)
-            strip.paste(fr_im, (i * fw, 0))
-        strip.save(OUT_PEOPLE / f"{name}.png")
+        strip_of(f).save(OUT_PEOPLE / f"{name}.png")
         done.add(name)
+    return done
+
+
+def hoenn_people(em: Path) -> set[str]:
+    """호연 맵에 서 있는 사람들 (에메랄드) → assets/people/em/"""
+    out = OUT_PEOPLE / "em"
+    out.mkdir(parents=True, exist_ok=True)
+    gfx = set()
+    for m in hoenn_maps(em):
+        for o in load_map(em, m).get("object_events", []):
+            gfx.add(snake_to_file(o.get("graphics_id", "")))
+    done = set()
+    for name in sorted(gfx):
+        f = em / "graphics/object_events/pics/people" / f"{name}.png"
+        if f.exists():
+            strip_of(f).save(out / f"{name}.png")
+            done.add(f"em/{name}")
     return done
 
 
@@ -192,8 +247,24 @@ def main():
             if not (OUT_MAPS / f"{sc['map']}.png").exists():
                 print("맵 그림 없음:", key, kind, sc["map"])
         places[key] = p
+    # 호연 (에메랄드)
+    em_layouts = {l["id"]: l for l in json.loads((em / "data/layouts/layouts.json").read_text())["layouts"] if "id" in l}
+    em_have = hoenn_people(em)
+    for key, outdoor in HOENN_OUTDOOR.items():
+        p = {"field": scene_of(em, em_layouts, outdoor, "field", em_have, "em/")}
+        town = HOENN_TOWNS.get(key)
+        if town:
+            for kind, suffix in (("center", "PokemonCenter_1F"), ("mart", "Mart"), ("gym", "Gym")):
+                if (em / "data/maps" / f"{town}_{suffix}").exists():
+                    p[kind] = scene_of(em, em_layouts, f"{town}_{suffix}", kind, em_have, "em/")
+        for kind, name in HOENN_INDOOR.get(key, {}).items():
+            p[kind] = scene_of(em, em_layouts, name, kind, em_have, "em/")
+        for kind, sc in p.items():
+            if not (OUT_MAPS / f"{sc['map']}.png").exists():
+                print("맵 그림 없음:", key, kind, sc["map"])
+        places[key] = p
     (OUT_MAPS / "places.json").write_text(json.dumps(places, ensure_ascii=False, separators=(",", ":")))
-    print("장소", len(places), "사람", len(have))
+    print("장소", len(places), "사람", len(have) + len(em_have))
 
 
 if __name__ == "__main__":
