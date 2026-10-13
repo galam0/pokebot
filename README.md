@@ -77,7 +77,11 @@ PokeRogue처럼 웨이브를 넘어가는 **데일리·주간 챌린지**가 있
 - `game/engine.py` 배틀 엔진 (디스코드와 무관한 순수 파이썬)
 - `game/adventure.py` 모험 진행 (이동·탐색·트레이너·체육관·리그·센터·PC·상점), `game/kanto.py` 관동 데이터, `game/johto.py` 성도, `game/hoenn.py` 호연 데이터
 - `game/pokedata.json.gz` 포켓몬 데이터 (`tools/build_data.py`로 PokeAPI CSV에서 생성)
-- `game/scene.py` 게임풍 그림 (배틀 GIF·필드·관동 지도, Pillow), `sprites.py` PokeAPI 스프라이트 캐시
+- `game/scene/` 게임풍 그림 (Pillow). 화면 종류별로 나눠 두고 `scene.battle(...)`처럼 한 곳에서 불러 써요
+  - `base` 공통 도구(캔버스·글자·게이지·배경) · `fight` 배틀(PNG·GIF)·결과·트레이너 등장 · `team` 상태창·파티 · `reward` 보상
+  - `place` 필드·맵 장면·PC 박스·관동 지도 · `badge` 배지 · `card` 메뉴 카드 · `opening` 소개·주인공·스타팅 · `pokedex` 도감
+  - 위에서 아래로만 가져와요 (`base` ← 나머지). 새 화면을 만들면 알맞은 파일에 넣고 `__init__.py`에 이름만 추가
+- `sprites.py` PokeAPI 스프라이트 캐시
 - `assets/maps/` 파이어레드 맵 (`tools/render_maps.py`), `assets/maps/places.json`·`assets/people/`·`assets/pc/` (`tools/build_places.py`)
 - `game/heroes.py` 주인공 목록, `assets/trainers/` 주인공 그림 (smogon/sprites, 6·8·9세대는 쇼다운에서 받음)
 - `storage.py` Neon Postgres 저장 (`DATABASE_URL`), `ui.py` 화면·버튼, `bot.py` 명령어·버튼 처리
