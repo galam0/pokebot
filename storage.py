@@ -112,7 +112,8 @@ async def save_run(user_id: int, run: dict):
 async def finish_run(user_id: int, name: str, run: dict, cleared_waves: int, clear: bool):
     """게임이 끝나면 게임을 지우고 트레이너 기록을 갱신한다."""
     _runs[user_id] = None
-    starter, final = run["starter"], run["p"]["sid"]
+    party = run.get("party") or [run.get("p")]
+    starter, final = run["starter"], max(party, key=lambda m: m["lv"])["sid"]   # 가장 레벨이 높은 포켓몬
     if not _pool:
         t = _memory_trainers.setdefault(user_id, {"user_id": user_id, "name": name, "best_wave": 0, "runs": 0, "clears": 0,
                                                   "total_waves": 0, "best_starter": None, "best_final": None})

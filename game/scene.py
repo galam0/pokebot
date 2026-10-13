@@ -106,6 +106,8 @@ _GLYPHS = {
     ":": ["00000", "01100", "01100", "00000", "01100", "01100", "00000"],
     "!": ["00100", "00100", "00100", "00100", "00100", "00000", "00100"],
     " ": ["000", "000", "000", "000", "000", "000", "000"],
+    ",": ["000", "000", "000", "000", "000", "011", "010"],
+    "₽": ["11110", "10001", "10001", "11110", "11100", "10000", "10000"],
 }
 
 
@@ -276,8 +278,35 @@ def _platform(d, cx, cy, rx, ry, biome: str):
 
 
 # ---------- 배틀 화면 ----------
+def _party_balls(d, x, y, run: dict):
+    """파티 6칸을 작은 볼로 표시 (살아 있음 / 기절 / 빈칸)"""
+    for i in range(E.MAX_PARTY):
+        bx = x + i * 9
+        if i < len(run["party"]):
+            m = run["party"][i]
+            top = (224, 64, 56) if m["hp"] > 0 else (128, 128, 136)
+            d.ellipse((bx, y, bx + 6, y + 6), fill=(248, 248, 248), outline=(40, 40, 48))
+            d.chord((bx, y, bx + 6, y + 6), 180, 360, fill=top, outline=(40, 40, 48))
+            d.point((bx + 3, y + 3), fill=(40, 40, 48))
+        else:
+            d.ellipse((bx + 1, y + 1, bx + 5, y + 5), outline=(160, 160, 168))
+
+
+def _mini_gauge(d, x, y, w, ratio):
+    """이름 옆에 쓰는 얇은 HP 게이지 (높이 5)"""
+    key = "green" if ratio > 0.5 else ("yellow" if ratio > 0.2 else "red")
+    col = _GAUGE[key]
+    d.rectangle((x, y, x + w, y + 4), fill=_GAUGE_FRAME)
+    x0, x1 = x + 1, x + w - 1
+    fill_to = x0 - 1 + (0 if ratio <= 0 else max(1, round((x1 - x0 + 1) * min(1.0, ratio))))
+    for i, k in enumerate((0, 1, 2)):
+        d.line((x0, y + 1 + i, x1, y + 1 + i), fill=_GAUGE_EMPTY[k])
+        if fill_to >= x0:
+            d.line((x0, y + 1 + i, fill_to, y + 1 + i), fill=col[k])
+
+
 def battle(run: dict, get_sprite: SpriteGetter | None = None, message: list[str] | None = None) -> bytes:
-    p, e, wave = run["p"], run["e"], run["wave"]
+    p, e, wave = E.lead(run), run["e"], run["wave"]
     biome = E.biome(wave)
     im, d = _canvas()
     _background(d, biome)
@@ -315,8 +344,9 @@ def battle(run: dict, get_sprite: SpriteGetter | None = None, message: list[str]
         r = e["hp"] / E.max_hp(e)
         _hp_gauge(d, 12, 28, 128, r)
 
-    # 내 정보창
+    # 내 정보창 (+ 파티 볼)
     _panel(d, (172, 98, 314, 142))
+    _party_balls(d, 258, 89, run)
     name = D.name(p["sid"])
     _text(d, (178, 102), name, font=BOLD)
     _status_tag(d, 178 + _tw(name, BOLD) + 4, 102, p.get("status"))
@@ -346,12 +376,16 @@ def _pick_lines(run: dict) -> list[str]:
     lines = [s for s in lines if s]
     if run["phase"] == "reward":
         return (lines[-1:] if lines else []) + ["보상을 하나 고르세요!"]
+    if run["phase"] == "switch":
+        return lines[-2:]
+    if run["phase"] == "replace":
+        return lines[-2:]
     if run["phase"] == "over":
         return lines[-1:] + [f"{run['wave'] - 1}웨이브 돌파! 게임이 끝났다."]
     if run["phase"] == "clear":
         return lines[-1:] + ["축하합니다! 모든 웨이브를 클리어했다!"]
     if run["phase"] == "battle" and len(lines) <= 2 and not any("데미지" in s for s in lines):
-        return lines[-2:] + [f"{D.name(run['p']['sid'])}은(는) 무엇을 할까?"]
+        return lines[-2:] + [f"{D.name(E.lead(run)['sid'])}은(는) 무엇을 할까?"]
     return lines[-3:]
 
 
@@ -371,8 +405,8 @@ def _message_box(d, lines: list[str]):
 STAT_RGB = [(232, 72, 64), (240, 160, 48), (240, 208, 64), (96, 144, 240), (120, 200, 96), (240, 104, 168)]
 
 
-def summary(run: dict, get_sprite: SpriteGetter | None = None) -> bytes:
-    p = run["p"]
+def summary(run: dict, get_sprite: SpriteGetter | None = None, index: int | None = None) -> bytes:
+    p = run["party"][run["active"] if index is None else index]
     im, d = _canvas((232, 232, 224))
     t0 = D.types(p["sid"])[0]
     head = TYPE_RGB[t0]
@@ -438,9 +472,15 @@ def summary(run: dict, get_sprite: SpriteGetter | None = None) -> bytes:
 
 # ---------- 보상 화면 ----------
 REWARD_ICON = {   # 보상 → PokeAPI 아이템 스프라이트 이름
-    "potion": "potion", "superpot": "super-potion", "fullrest": "full-restore", "fullheal": "full-heal",
+    "balls": "poke-ball", "great": "great-ball", "ultra": "ultra-ball", "master": "master-ball",
+    "potion": "potion", "superpot": "super-potion", "fullrest": "full-restore", "revive": "revive",
     "candy": "rare-candy", "candy3": "rare-candy", "hpup": "hp-up", "protein": "protein", "iron": "iron",
-    "calcium": "calcium", "zinc": "zinc", "carbos": "carbos", "expcharm": "exp-share",
+    "calcium": "calcium", "zinc": "zinc", "carbos": "carbos", "expcharm": "exp-share", "nugget": "nugget",
+}
+ITEM_ICON = {   # 가방 아이템 → 스프라이트 이름
+    "pokeball": "poke-ball", "greatball": "great-ball", "ultraball": "ultra-ball", "masterball": "master-ball",
+    "potion": "potion", "superpot": "super-potion", "fullrest": "full-restore", "fullheal": "full-heal",
+    "revive": "revive",
 }
 ItemGetter = Callable[[str], Image.Image | None]
 
@@ -465,6 +505,8 @@ def rewards(run: dict, get_sprite: SpriteGetter | None = None, get_item: ItemGet
     _background(d, E.biome(run["wave"]))
     d.rectangle((0, 0, W, 22), fill=(40, 56, 88))
     _text(d, (8, 5), f"WAVE {run['wave']} 클리어!  보상을 하나 고르세요", font=BOLD, fill=(255, 232, 120), shadow=(16, 24, 40))
+    money = f"₽{run.get('money', 0):,}"
+    _text(d, (W - _tw(money, BOLD) - 8, 5), money, font=BOLD, fill=(255, 255, 255), shadow=(16, 24, 40))
     for i, key in enumerate(run["rewards"][:3]):
         r = E.REWARDS[key]
         x0 = 8 + i * 103
@@ -489,21 +531,73 @@ def rewards(run: dict, get_sprite: SpriteGetter | None = None, get_item: ItemGet
         desc = r["d"].replace(" (", "\n(").split("\n") if " (" in r["d"] else _wrap(r["d"], 90)
         for j, line in enumerate(desc[:2]):
             _text(d, (x0 + 49 - _tw(line) // 2, 97 + j * 11), line, fill=(88, 88, 104))
-    # 아래: 내 포켓몬 상태
-    p = run["p"]
-    _panel(d, (8, 128, 312, 186), fill=(248, 248, 240))
-    sp = _sprite(get_sprite, p["sid"], False)
-    sp.thumbnail((48, 48), Image.NEAREST)
-    im.paste(sp, (36 - sp.width // 2, 182 - sp.height), sp)
-    _text(d, (66, 134), D.name(p["sid"]), font=BOLD)
-    lv = f"Lv.{p['lv']}"
-    _text(d, (304 - _tw(lv), 134), lv)
-    mh = E.max_hp(p)
-    r = p["hp"] / mh
-    _hp_gauge(d, 66, 150, 178, r)
-    _text(d, (250, 150), f"{p['hp']}/{mh}")
-    need = E.exp_to_next(p)
-    _text(d, (66, 166), "EXP", fill=(64, 128, 200))
-    _exp_gauge(d, 88, 168, 156, (p["exp"] / need) if need else 1)
-    _text(d, (250, 166), f"다음 {need - p['exp']}" if need else "MAX")
+    # 아래: 파티 6칸
+    _party_strip(im, d, run, get_sprite, 8, 126)
+    return _finish(im, d)
+
+
+def _party_strip(im, d, run: dict, get_sprite, x0: int, y0: int):
+    """파티 6마리를 한 줄로 (스프라이트, Lv, 얇은 HP)"""
+    _panel(d, (x0, y0, W - x0, y0 + 60), fill=(248, 248, 240))
+    slot = (W - 2 * x0 - 4) // E.MAX_PARTY
+    for i in range(E.MAX_PARTY):
+        sx = x0 + 2 + i * slot
+        if i >= len(run["party"]):
+            d.rounded_rectangle((sx + 3, y0 + 5, sx + slot - 3, y0 + 55), radius=3, outline=(216, 216, 208))
+            continue
+        m = run["party"][i]
+        if i == run["active"]:
+            d.rounded_rectangle((sx + 1, y0 + 3, sx + slot - 1, y0 + 57), radius=3, fill=(255, 244, 208), outline=(216, 168, 72))
+        sp = _sprite(get_sprite, m["sid"], False)
+        sp.thumbnail((32, 32), Image.NEAREST)
+        if m["hp"] <= 0:
+            sp = sp.convert("LA").convert("RGBA")
+        im.paste(sp, (sx + slot // 2 - sp.width // 2, y0 + 36 - sp.height), sp)
+        lv = f"Lv.{m['lv']}"
+        _text(d, (sx + slot // 2 - _tw(lv) // 2, y0 + 37), lv)
+        _mini_gauge(d, sx + 5, y0 + 50, slot - 10, m["hp"] / E.max_hp(m))
+
+
+# ---------- 파티 화면 ----------
+def party(run: dict, get_sprite: SpriteGetter | None = None, title: str = "파티", mark: list[int] | None = None) -> bytes:
+    """6칸 파티 화면. mark: 고를 수 있는 칸 (나머지는 흐리게)"""
+    im, d = _canvas((56, 80, 120))
+    for y in range(0, H, 8):   # 줄무늬 배경
+        d.line((0, y, W, y), fill=(64, 88, 128))
+    d.rectangle((0, 0, W, 18), fill=(40, 56, 88))
+    _text(d, (6, 3), title, font=BOLD, fill=(255, 232, 120), shadow=(16, 24, 40))
+    money = f"₽{run.get('money', 0):,}"
+    _text(d, (W - _tw(money, BOLD) - 6, 3), money, font=BOLD, fill=(255, 255, 255), shadow=(16, 24, 40))
+    for i in range(E.MAX_PARTY):
+        x0, y0 = 6 + (i % 2) * 156, 23 + (i // 2) * 56
+        box = (x0, y0, x0 + 152, y0 + 52)
+        if i >= len(run["party"]):
+            d.rounded_rectangle(box, radius=5, outline=(96, 120, 160))
+            continue
+        m = run["party"][i]
+        dim = mark is not None and i not in mark
+        fainted = m["hp"] <= 0
+        fill = (200, 200, 200) if fainted else ((255, 244, 208) if i == run["active"] else (248, 248, 240))
+        if dim:
+            fill = tuple(int(c * 0.7) for c in fill)
+        d.rounded_rectangle(box, radius=5, fill=fill, outline=(216, 168, 72) if i == run["active"] else PANEL_EDGE, width=2 if i == run["active"] else 1)
+        _text(d, (x0 + 5, y0 + 3), f"{i + 1}", fill=(160, 120, 40))
+        sp = _sprite(get_sprite, m["sid"], False)
+        sp.thumbnail((44, 44), Image.NEAREST)
+        if fainted or dim:
+            sp = sp.convert("LA").convert("RGBA")
+        im.paste(sp, (x0 + 30 - sp.width // 2, y0 + 49 - sp.height), sp)
+        name = D.name(m["sid"])
+        _text(d, (x0 + 56, y0 + 4), name, font=BOLD, fill=(96, 96, 104) if dim else INK)
+        lv = f"Lv.{m['lv']}"
+        _text(d, (x0 + 148 - _tw(lv), y0 + 4), lv)
+        sx = x0 + 56
+        if fainted:
+            _text(d, (sx, y0 + 17), "기절", fill=(200, 48, 48))
+        else:
+            _status_tag(d, sx, y0 + 18, m.get("status"))
+        mh = E.max_hp(m)
+        _hp_gauge(d, sx, y0 + 30, 90, m["hp"] / mh)
+        hp = f"{m['hp']}/{mh}"
+        _text(d, (x0 + 148 - _tw(hp), y0 + 39), hp)
     return _finish(im, d)

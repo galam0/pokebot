@@ -127,86 +127,100 @@ class PokeBot(discord.Client):
 bot = PokeBot()
 
 
-# ---------- 버튼 처리 ----------
+ACTIVE = ("battle", "reward", "switch", "replace")
+
+
+async def get_run(uid: int) -> dict | None:
+    run = await storage.get_run(uid)
+    return E.normalize(run) if run else None
+
+
 # ---------- 그림 ----------
-async def render_scene(run: dict) -> discord.File | None:
-    """배틀/보상 화면 그림. 실패하면 None → 글자 화면으로 대신 보여준다."""
+def _party_sids(run: dict) -> list[int]:
+    return [m["sid"] for m in run["party"]]
+
+
+async def render(run: dict, kind: str = "scene", **kwargs) -> discord.File | None:
+    """화면 그림. kind: scene(배틀/보상) / party / summary. 실패하면 None → 글자 화면으로 대신 보여준다."""
     try:
-        p, e = run["p"], run.get("e")
-        reward = run["phase"] == "reward"
-        await sprites.ensure(
-            sids=[x for x in ([e["sid"]] if e else []) + ([p["sid"]] if reward else [])],
-            backs=[p["sid"]],
-            items=[scene.REWARD_ICON[k] for k in run.get("rewards", [])] if reward else [],
-            timeout=1.0)
-        if reward:
+        p, e = E.lead(run), run.get("e")
+        if kind == "party":
+            await sprites.ensure(sids=_party_sids(run), timeout=1.0)
+            png = await asyncio.to_thread(scene.party, run, sprites.get_sprite, **kwargs)
+            name = ui.SCENE_FILE
+        elif kind == "summary":
+            idx = kwargs.get("index")
+            await sprites.ensure(sids=[run["party"][run["active"] if idx is None else idx]["sid"]], timeout=1.0)
+            png = await asyncio.to_thread(scene.summary, run, sprites.get_sprite, idx)
+            name = ui.SUMMARY_FILE
+        elif run["phase"] == "reward":
+            await sprites.ensure(sids=_party_sids(run),
+                                 items=[scene.REWARD_ICON[k] for k in run.get("rewards", [])], timeout=1.0)
             png = await asyncio.to_thread(scene.rewards, run, sprites.get_sprite, sprites.get_item)
+            name = ui.SCENE_FILE
         else:
+            await sprites.ensure(sids=[e["sid"]] if e else [], backs=[p["sid"]], timeout=1.0)
             png = await asyncio.to_thread(scene.battle, run, sprites.get_sprite)
-        return discord.File(io.BytesIO(png), filename=ui.SCENE_FILE)
+            name = ui.SCENE_FILE
+        return discord.File(io.BytesIO(png), filename=name)
     except Exception as ex:
-        log.warning("화면 그림 실패: %s", short_error(ex))
-        return None
-
-
-async def render_summary(run: dict) -> discord.File | None:
-    try:
-        await sprites.ensure(sids=[run["p"]["sid"]], timeout=1.0)
-        png = await asyncio.to_thread(scene.summary, run, sprites.get_sprite)
-        return discord.File(io.BytesIO(png), filename=ui.SUMMARY_FILE)
-    except Exception as ex:
-        log.warning("상태창 그림 실패: %s", short_error(ex))
+        log.warning("그림 실패 (%s): %s", kind, short_error(ex))
         return None
 
 
 def prefetch_next(run: dict):
     """응답을 보낸 뒤, 다음에 필요할 그림을 미리 받아 둔다."""
-    p = run["p"]
-    evos = [c for c, _ in D.SPECIES[p["sid"]]["evo"]]
+    evos = [c for m in run["party"] for c, _ in D.SPECIES[m["sid"]]["evo"]]
     nxt = (run.get("next_e") or {}).get("mon")
-    sprites.prefetch(sids=[nxt["sid"]] if nxt else [], backs=evos)
+    sprites.prefetch(sids=([nxt["sid"]] if nxt else []) + _party_sids(run), backs=evos + _party_sids(run))
 
 
-async def show_battle(interaction: discord.Interaction, run: dict):
-    file = await render_scene(run)
-    embed, view = ui.battle_screen(interaction.user.id, interaction.user.display_name, run, image=file is not None)
-    await interaction.response.edit_message(content=None, embeds=[embed], view=view,
-                                            attachments=[file] if file else [])
+async def show(interaction: discord.Interaction, run: dict, make, send: bool = False, ephemeral: bool = False,
+               content: str | None = None):
+    """make(image: bool) -> ui.Screen 를 그림과 함께 보여준다 (send=False면 지금 메시지를 바꿈)"""
+    probe = make(True)
+    file = await render(run, probe.image, **probe.image_args)
+    sc = probe if file else make(False)
+    if send:
+        kwargs = {"file": file} if file else {}
+        await interaction.response.send_message(content=content or sc.content, embed=sc.embed, view=sc.view,
+                                                ephemeral=ephemeral, **kwargs)
+    else:
+        await interaction.response.edit_message(content=content, embeds=[sc.embed], view=sc.view,
+                                                attachments=[file] if file else [])
     prefetch_next(run)
 
 
-async def send_battle(interaction: discord.Interaction, run: dict, content: str | None = None):
-    file = await render_scene(run)
-    embed, view = ui.battle_screen(interaction.user.id, interaction.user.display_name, run, image=file is not None)
-    kwargs = {"file": file} if file else {}
-    await interaction.response.send_message(content=content, embed=embed, view=view, **kwargs)
-    prefetch_next(run)
+def _main(uid: int, trainer: str, run: dict):
+    return lambda image: ui.battle_screen(uid, trainer, run, image)
 
 
-async def send_summary(interaction: discord.Interaction, run: dict, ephemeral: bool):
-    file = await render_summary(run)
-    embed = ui.mon_detail(interaction.user.display_name, run, image=file is not None)
+async def send_summary(interaction: discord.Interaction, run: dict, index: int | None, ephemeral: bool):
+    file = await render(run, "summary", index=index)
+    embed = ui.mon_detail(interaction.user.display_name, run, index, image=file is not None)
     kwargs = {"file": file} if file else {}
     await interaction.response.send_message(embed=embed, ephemeral=ephemeral, **kwargs)
 
 
+# ---------- 버튼 처리 ----------
 async def handle_component(interaction: discord.Interaction, custom_id: str):
     parts = custom_id.split(":")
     _, uid, ver, act = parts[:4]
-    arg = parts[4] if len(parts) > 4 else ""
+    arg = ":".join(parts[4:])
     uid, ver = int(uid), int(ver)
     user = interaction.user
+    name = user.display_name
     if user.id != uid:
         await interaction.response.send_message("다른 트레이너의 화면이에요. `/스타팅`으로 직접 모험을 시작해 보세요!", ephemeral=True)
         return
 
     async with storage.lock(uid):
-        run = await storage.get_run(uid)
+        run = await get_run(uid)
 
         # --- 스타팅 고르기 (게임이 없을 때) ---
         if act in ("region", "regions", "starter", "new"):
-            if run and run["phase"] in ("battle", "reward"):
-                await show_battle(interaction, run)   # 이미 진행 중인 게임이 있으면 그 화면으로
+            if run and run["phase"] in ACTIVE:
+                await show(interaction, run, _main(uid, name, run))   # 이미 진행 중인 게임이 있으면 그 화면으로
                 return
             if act == "region":
                 region = (interaction.data.get("values") or [""])[0]
@@ -217,23 +231,29 @@ async def handle_component(interaction: discord.Interaction, custom_id: str):
                 run = E.new_run(int(arg), rng)
                 run["ver"] = 1
                 storage.cache_run(uid, run)
-                await show_battle(interaction, run)
+                await show(interaction, run, _main(uid, name, run))
                 _bg(storage.save_run(uid, run), "게임 저장")
                 log.info("새 게임: %s → %s", user, run["starter"])
                 return
             else:
                 content, embeds, view = ui.region_screen(uid)
-            await interaction.response.edit_message(content=content or None, embeds=embeds, view=view)
+            await interaction.response.edit_message(content=content or None, embeds=embeds, view=view, attachments=[])
             return
 
         if not run:
             await interaction.response.edit_message(content="이 게임은 이미 끝났어요. `/스타팅`으로 새로 시작해 보세요.",
-                                                    embeds=[], view=None)
+                                                    embeds=[], view=None, attachments=[])
             return
 
-        # --- 상세 정보는 버전과 상관없이 보여줌 ---
+        # --- 보기만 하는 화면 (버전과 상관없이, 본인에게만) ---
         if act == "info":
-            await send_summary(interaction, run, ephemeral=True)
+            idx = int(arg) if arg else None
+            if idx is not None and not 0 <= idx < len(run["party"]):
+                idx = None
+            await send_summary(interaction, run, idx, ephemeral=True)
+            return
+        if act == "party":
+            await show(interaction, run, lambda image: ui.party_screen(uid, name, run, image), send=True, ephemeral=True)
             return
 
         if ver != run.get("ver", 0):
@@ -242,40 +262,93 @@ async def handle_component(interaction: discord.Interaction, custom_id: str):
                 ephemeral=True)
             return
 
-        if act == "quit":
-            file = await render_scene(run)
-            embed, _ = ui.battle_screen(uid, user.display_name, run, image=file is not None)
-            embed.add_field(name="🏳️ 정말 포기할까요?", value="포기하면 이번 게임은 여기서 끝나고 기록만 남아요.", inline=False)
-            await interaction.response.edit_message(embeds=[embed], view=ui.quit_confirm(uid, run["ver"]),
-                                                    attachments=[file] if file else [])
+        phase = run["phase"]
+        # --- 메뉴 열기 (게임 상태는 그대로) ---
+        menus = {
+            "quit": lambda image: ui.quit_screen(uid, name, run, image),
+            "bag": lambda image: ui.bag_screen(uid, name, run, image),
+            "swmenu": lambda image: ui.switch_screen(uid, name, run, image),
+            "shop": lambda image: ui.shop_screen(uid, name, run, image),
+            "back": _main(uid, name, run),
+        }
+        if act in menus:
+            if act == "swmenu" and (phase != "battle" or len(E.alive(run)) < 2):
+                act = "back"
+            if act == "shop" and phase != "reward":
+                act = "back"
+            await show(interaction, run, menus[act])
             return
-        if act == "back":
-            await show_battle(interaction, run)
+        if act == "item" and arg in run["bag"] and not E.is_ball(arg):
+            targets = E.item_targets(run, arg)
+            if not targets:
+                return await notify_failure(interaction, "지금 쓸 수 있는 포켓몬이 없어요.")
+            title = f"🎒 {E.ITEMS[arg]['n']}"
+            await show(interaction, run, lambda image: ui.target_screen(uid, name, run, title, "itemt", arg, targets, image))
             return
+        if act == "reward" and phase == "reward" and arg.isdigit() and int(arg) < len(run["rewards"]):
+            key = run["rewards"][int(arg)]
+            if E.REWARDS[key]["kind"] == "target":
+                targets = E.reward_targets(run, key)
+                if not targets:
+                    return await notify_failure(interaction, "이 보상을 쓸 수 있는 포켓몬이 없어요. 다른 보상을 골라 주세요.")
+                title = f"🎁 {E.REWARDS[key]['n']}"
+                await show(interaction, run,
+                           lambda image: ui.target_screen(uid, name, run, title, "rewardt", arg, targets, image))
+                return
 
-        if act == "quitok":
-            run["log"] = ["🏳️ 게임을 포기했다."]
-            run["phase"] = "over"
-        elif act == "move" and run["phase"] == "battle":
-            idx = int(arg)
-            if not run["p"]["rc"] and not 0 <= idx < len(run["p"]["moves"]):
-                return await notify_failure(interaction, "그 기술은 이제 없어요.")
-            E.take_turn(run, idx, rng)
-        elif act == "reward" and run["phase"] == "reward":
-            E.choose_reward(run, int(arg), rng)
-        elif act == "skip" and run["phase"] == "reward":
-            E.skip_reward(run, rng)
-        else:
-            await show_battle(interaction, run)
+        # --- 게임 상태를 바꾸는 동작 ---
+        stay = None   # 바뀐 뒤 보여줄 메뉴 (없으면 기본 화면)
+        try:
+            if act == "quitok":
+                run["log"] = ["🏳️ 게임을 포기했다."]
+                run["phase"] = "over"
+            elif act == "move" and phase == "battle":
+                p = E.lead(run)
+                idx = int(arg)
+                if not p["rc"] and not 0 <= idx < len(p["moves"]):
+                    return await notify_failure(interaction, "그 기술은 이제 없어요.")
+                E.take_turn(run, idx, rng)
+            elif act == "sw" and phase in ("battle", "switch"):
+                E.switch(run, int(arg), rng)
+            elif act == "ball" and phase == "battle":
+                E.throw_ball(run, arg, rng)
+            elif act == "itemt" and phase in ("battle", "reward"):
+                item, t = arg.rsplit(".", 1)
+                E.use_item(run, item, int(t), rng)
+            elif act == "reward" and phase == "reward":
+                E.choose_reward(run, int(arg), rng)
+            elif act == "rewardt" and phase == "reward":
+                i, t = arg.split(".")
+                E.choose_reward(run, int(i), rng, target=int(t))
+            elif act == "skip" and phase == "reward":
+                E.skip_reward(run, rng)
+            elif act == "reroll" and phase == "reward":
+                E.reroll(run, rng)
+            elif act == "buy" and phase == "reward":
+                E.buy(run, arg)
+                stay = "shop"
+            elif act == "rel" and phase == "replace":
+                E.resolve_replace(run, int(arg))
+            elif act == "relnew" and phase == "replace":
+                E.resolve_replace(run, None)
+            else:
+                await show(interaction, run, _main(uid, name, run))
+                return
+        except (ValueError, IndexError, KeyError) as ex:
+            log.info("안 되는 동작 %s (%s): %s", act, arg, ex)
+            await notify_failure(interaction, "지금은 그걸 할 수 없어요. 화면을 다시 확인해 주세요.")
             return
 
         run["ver"] = run.get("ver", 0) + 1
-        await show_battle(interaction, run)
+        if stay == "shop":
+            await show(interaction, run, lambda image: ui.shop_screen(uid, name, run, image))
+        else:
+            await show(interaction, run, _main(uid, name, run))
 
         if run["phase"] in ("over", "clear"):
             cleared = run["wave"] if run["phase"] == "clear" else run["wave"] - 1
             storage.cache_run(uid, None)
-            _bg(storage.finish_run(uid, user.display_name, run, cleared, run["phase"] == "clear"), "게임 기록")
+            _bg(storage.finish_run(uid, name, run, cleared, run["phase"] == "clear"), "게임 기록")
             log.info("게임 종료: %s %d웨이브", user, cleared)
         else:
             _bg(storage.save_run(uid, run), "게임 저장")
@@ -292,10 +365,10 @@ async def on_command_error(interaction: discord.Interaction, error: app_commands
 @bot.tree.command(name="스타팅", description="스타팅 포켓몬을 골라 새 게임(모험)을 시작해요")
 async def start(interaction: discord.Interaction):
     uid = interaction.user.id
-    run = await storage.get_run(uid)
-    if run and run["phase"] in ("battle", "reward"):
-        await send_battle(interaction, run,
-                          content="진행 중인 게임이 있어요! 이어서 하거나, 🏳️ 포기 후 새로 시작할 수 있어요.")
+    run = await get_run(uid)
+    if run and run["phase"] in ACTIVE:
+        await show(interaction, run, _main(uid, interaction.user.display_name, run), send=True,
+                   content="진행 중인 게임이 있어요! 이어서 하거나, 🏳️ 포기 후 새로 시작할 수 있어요.")
         return
     content, embeds, view = ui.region_screen(uid)
     await interaction.response.send_message(content=content or None, embeds=embeds, view=view)
@@ -304,20 +377,21 @@ async def start(interaction: discord.Interaction):
 @bot.tree.command(name="이어하기", description="진행 중인 게임 화면을 다시 불러와요")
 async def resume(interaction: discord.Interaction):
     uid = interaction.user.id
-    run = await storage.get_run(uid)
-    if not run or run["phase"] not in ("battle", "reward"):
+    run = await get_run(uid)
+    if not run or run["phase"] not in ACTIVE:
         await interaction.response.send_message("진행 중인 게임이 없어요. `/스타팅`으로 시작해 보세요!", ephemeral=True)
         return
-    await send_battle(interaction, run)
+    await show(interaction, run, _main(uid, interaction.user.display_name, run), send=True)
 
 
-@bot.tree.command(name="내포켓몬", description="이번 게임에서 함께하는 포켓몬의 능력치와 기술을 봐요")
+@bot.tree.command(name="내포켓몬", description="이번 게임의 파티를 보고, 한 마리씩 자세히 볼 수 있어요")
 async def my_pokemon(interaction: discord.Interaction):
-    run = await storage.get_run(interaction.user.id)
+    uid = interaction.user.id
+    run = await get_run(uid)
     if not run:
         await interaction.response.send_message("진행 중인 게임이 없어요. `/스타팅`으로 시작해 보세요!", ephemeral=True)
         return
-    await send_summary(interaction, run, ephemeral=False)
+    await show(interaction, run, lambda image: ui.party_screen(uid, interaction.user.display_name, run, image), send=True)
 
 
 @bot.tree.command(name="기록", description="내 최고 기록과 랭킹을 봐요")
