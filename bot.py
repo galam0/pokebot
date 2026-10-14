@@ -106,6 +106,10 @@ class PokeBot(discord.Client):
 
     async def on_ready(self):
         log.info("로그인: %s / 서버 %d곳", self.user, len(self.guilds))
+        # 채널 보기·메시지 보내기·임베드·파일 첨부·기록 보기·공개 스레드 만들기·스레드에 메시지 보내기
+        perms = 1024 | 2048 | 16384 | 32768 | 65536 | (1 << 35) | (1 << 38)
+        log.info("초대 링크: https://discord.com/oauth2/authorize?client_id=%s&scope=bot+applications.commands"
+                 "&permissions=%d", self.application_id or self.user.id, perms)
         if getattr(self, "_synced", False):
             return
         self._synced = True
