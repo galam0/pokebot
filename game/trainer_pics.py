@@ -24,6 +24,14 @@ EM_CLASS = {
     "마그마단 리더 마적": "magma_leader_maxie", "아쿠아단 리더 아강": "aqua_leader_archie",
 }
 HG_CLASS = {"스님": "Sage", "로켓단 간부": "Proton"}   # 파이어레드에 없는 성도 분류
+PT_CLASS = {   # 플라티나 (신오 트레이너 전부)
+    "반바지꼬마": "youngster", "짧은치마": "lass", "곤충채집소년": "bug_catcher", "등산가": "hiker",
+    "캠프보이": "camper", "피크닉걸": "picnicker", "엘리트트레이너": "ace_trainer_male", "새조련사": "bird_keeper",
+    "어부": "fisherman", "초능력자": "psychic_male", "배틀걸": "battle_girl", "닌자소년": "ninja_boy",
+    "무당": "psychic_female", "스키어": "skier_male", "갤럭시단 조무래기": "galactic_grunt_male",
+    "갤럭시단 간부 마스": "commander_mars", "갤럭시단 간부 주피터": "commander_jupiter",
+    "갤럭시단 간부 새턴": "commander_saturn", "갤럭시단 보스 태홍": "galactic_boss", "라이벌 용식": "rival",
+}
 NAMED = {   # (지방, 배틀 이름) → 파일
     ("kanto", "관장 웅"): "fr_leader_brock", ("kanto", "관장 이슬"): "fr_leader_misty",
     ("kanto", "관장 마티스"): "fr_leader_lt_surge", ("kanto", "관장 민화"): "fr_leader_erika",
@@ -44,6 +52,13 @@ NAMED = {   # (지방, 배틀 이름) → 파일
     ("hoenn", "사천왕 혁진"): "em_elite_four_sidney", ("hoenn", "사천왕 회연"): "em_elite_four_phoebe",
     ("hoenn", "사천왕 미혜"): "em_elite_four_glacia", ("hoenn", "사천왕 권수"): "em_elite_four_drake",
     ("hoenn", "챔피언 성호"): "em_steven", ("hoenn", "라이벌 봄이"): "em_may",
+    ("sinnoh", "관장 강석"): "pt_leader_roark", ("sinnoh", "관장 유채"): "pt_leader_gardenia",
+    ("sinnoh", "관장 멜리사"): "pt_leader_fantina", ("sinnoh", "관장 자두"): "pt_leader_maylene",
+    ("sinnoh", "관장 맥시"): "pt_leader_wake", ("sinnoh", "관장 동관"): "pt_leader_byron",
+    ("sinnoh", "관장 무청"): "pt_leader_candice", ("sinnoh", "관장 전진"): "pt_leader_volkner",
+    ("sinnoh", "사천왕 충호"): "pt_elite_four_aaron", ("sinnoh", "사천왕 들국화"): "pt_elite_four_bertha",
+    ("sinnoh", "사천왕 대엽"): "pt_elite_four_flint", ("sinnoh", "사천왕 오엽"): "pt_elite_four_lucian",
+    ("sinnoh", "챔피언 난천"): "pt_champion_cynthia",
 }
 # 주인공 뒷모습 원본 (파이어레드·에메랄드·플라티나). 없는 주인공은 등장 장면에서 앞모습 그림으로 선다
 BACK = {"red": "fr_back_red", "leaf": "fr_back_leaf", "brendan": "em_back_brendan", "may": "em_back_may",
@@ -57,6 +72,8 @@ def opponent(region: str, battle: dict) -> str | None:
         return NAMED[(region, name)]
     if battle.get("kind") == "rival" and region == "kanto":
         return "fr_rival_early" if battle.get("stage", 1) <= 4 else "fr_rival_late"
+    if region == "sinnoh":
+        return "pt_" + PT_CLASS[cls] if cls in PT_CLASS else ("pt_" + PT_CLASS.get(name, "") if name in PT_CLASS else None)
     if region == "hoenn" and cls in EM_CLASS:
         return "em_" + EM_CLASS[cls]
     if cls in HG_CLASS:
@@ -73,5 +90,5 @@ def player_back(hero: str) -> str | None:
 def all_files() -> set[str]:
     files = set(NAMED.values()) | set(BACK.values()) | {"fr_rival_early", "fr_rival_late"}
     files |= {"fr_" + v for v in FR_CLASS.values()} | {"em_" + v for v in EM_CLASS.values()}
-    files |= {"hg_" + v for v in HG_CLASS.values()}
+    files |= {"hg_" + v for v in HG_CLASS.values()} | {"pt_" + v for v in PT_CLASS.values()}
     return files

@@ -89,7 +89,7 @@ def place_data(loc_key: str, kind: str = "field") -> dict | None:
         f = _ASSETS / "maps" / "places.json"
         _places = json.loads(f.read_text()) if f.exists() else {}
     sc = (_places.get(loc_key) or {}).get(kind)
-    if not sc or _asset(f"maps/{sc.get('art') or sc['map']}.png") is None:
+    if not sc or _asset(f"maps/{sc.get('art') or sc.get('full') or sc['map']}.png") is None:
         return None
     return sc
 
@@ -144,6 +144,8 @@ def map_scene(run: dict, kind: str = "field", lines: list[tuple[str, tuple]] | N
         return None
     if "art" in sc:
         return _art_scene(run, sc["art"], kind, lines, get_trainer)
+    if "full" in sc:
+        return _full_scene(run, sc["full"], kind, lines, get_trainer)
     full = _asset(f"maps/{sc['map']}.png").copy()
     for name, x, y, face in sc["npcs"]:   # 사람들 (발이 칸 아래에 오게)
         img = _walker(name, face)
@@ -180,6 +182,17 @@ def _art_scene(run: dict, art: str, kind: str, lines, get_trainer) -> bytes:
     me = _walker(walker, "up") if walker else None
     if me:
         im.paste(me, (W // 2 - me.width // 2, 142 - me.height), me)
+    return _overlay(im, d, run, kind, lines, get_trainer, me is not None)
+
+
+def _full_scene(run: dict, pic: str, kind: str, lines, get_trainer) -> bytes:
+    """플라티나 3D 맵을 그린 그림 (화면 크기 그대로). 카메라가 주인공 칸을 보고 있으니 주인공은 화면 가운데에 선다"""
+    im, d = _canvas()
+    im.paste(_asset(f"maps/{pic}.png").convert("RGB"), (0, 0))
+    walker = _overworld(HR.of(run))
+    me = _walker(walker, "down") if walker else None
+    if me:   # 칸 가운데 = 화면 가운데, 발은 칸 아래쪽
+        im.paste(me, (W // 2 - me.width // 2, H // 2 + 8 - me.height + (4 if me.width > 16 else 0)), me)
     return _overlay(im, d, run, kind, lines, get_trainer, me is not None)
 
 

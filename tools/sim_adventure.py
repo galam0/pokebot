@@ -102,7 +102,7 @@ def strength(run):
 
 
 def _region(run):
-    return A.current_stage(run) or "hoenn"
+    return A.current_stage(run) or "sinnoh"
 
 
 def _order(run):
@@ -114,11 +114,11 @@ def league_due(run):
 
 
 def goal(run):
-    gift_town = {"johto": "newbark", "hoenn": "littleroot"}.get(_region(run))
+    gift_town = {"johto": "newbark", "hoenn": "littleroot", "sinnoh": "s_sandgem"}.get(_region(run))
     if gift_town and gift_town in A.LOC and f"gift:{gift_town}" not in run["flags"]:
         return gift_town
     if league_due(run):
-        return "evergrande" if _region(run) == "hoenn" else "plateau"
+        return {"hoenn": "evergrande", "sinnoh": "s_league"}.get(_region(run), "plateau")
     for g in _order(run):
         if g not in run["badges"]:
             return next(k for k, L in A.LOC.items() if L.get("gym") == g)
@@ -132,7 +132,7 @@ def gym_ace(run):
 
 
 def league_level(run):
-    return {"kanto": 56, "johto": 45, "hoenn": 52}[_region(run)]
+    return {"kanto": 56, "johto": 45, "hoenn": 52, "sinnoh": 58}[_region(run)]
 
 
 def hurt(run):
@@ -203,10 +203,25 @@ def field_action(run, rng, stats):
 def play(starter, rng, max_steps=40000, until=1):
     """until=1: 관동 챔피언까지, 2: 성도, 3: 호연 챔피언까지"""
     run = A.new_adventure(starter, rng, "sim")
+    if until == 4:   # 신오만 시험: 호연 챔피언이 된 상태로 해안시티에서 시작
+        A._end_battle(run)
+        for r in ("kanto", "johto", "hoenn"):
+            run["badges"] += A.REGIONS[r]["order"]
+            run["flags"].append(f"enter:{r}")
+        run.update(hof=1, hof2=1, hof3=1, loc="s_twinleaf", center="s_twinleaf", money=30000)
+        run["flags"] += [f"rival{s}" for s in list(range(1, 8)) + ["j1", "j2", "j3", "j4", "j5", "h1", "h2", "h3", "h4"]]
+        for sid in (6, 9, 3):
+            if len(run["party"]) < 3:
+                run["party"].append(E.new_mon(sid, 60, rng))
+        for m in run["party"]:
+            m["lv"] = 60
+            E.heal_full(m)
+        run["bag"].update({"great-ball": 20, "hyper-potion": 10})
+        A.enter_region(run, "sinnoh")
     stats = {"steps": 0, "battles": 0, "blackouts": 0, "retreats": 0, "grind": 0, "gym_tries": 0, "league_tries": 0,
              "badge_steps": []}
     badges = 0
-    key = {1: "hof", 2: "hof2", 3: "hof3"}[until]
+    key = {1: "hof", 2: "hof2", 3: "hof3", 4: "hof4"}[until]
     while stats["steps"] < max_steps and not run.get(key):
         stats["steps"] += 1
         ph = run["phase"]
@@ -229,6 +244,7 @@ def play(starter, rng, max_steps=40000, until=1):
     stats["hof"] = run.get("hof", 0)
     stats["hof2"] = run.get("hof2", 0)
     stats["hof3"] = run.get("hof3", 0)
+    stats["hof4"] = run.get("hof4", 0)
     stats["badges"] = len(run["badges"])
     stats["party"] = [(D.name(m["sid"]), m["lv"]) for m in run["party"]]
     stats["box"] = len(run["box"])
@@ -243,10 +259,10 @@ if __name__ == "__main__":
         st = (1, 4, 7)[i % 3]
         s = play(st, random.Random(i), 120000, until)
         res.append(s)
-        print(D.name(st), ("호연 챔피언" if s["hof3"] else "성도 챔피언" if s["hof2"] else "관동 챔피언") if s["hof"]
+        print(D.name(st), ("신오 챔피언" if s["hof4"] else "호연 챔피언" if s["hof3"] else "성도 챔피언" if s["hof2"] else "관동 챔피언") if s["hof"]
               else f"배지 {s['badges']}", "| 행동", s["steps"], "| 배틀", s["battles"],
               "| 기절", s["blackouts"], "| 체육관 도전", s["gym_tries"], "| 리그 도전", s["league_tries"],
               "| 수련", s["grind"], "| 배지별 (행동, 레벨)", s["badge_steps"])
         print("   파티", s["party"], "박스", s["box"])
     print("관동", sum(1 for s in res if s["hof"]), "· 성도", sum(1 for s in res if s["hof2"]),
-          "· 호연", sum(1 for s in res if s["hof3"]), "/", n, "| 행동 중앙값", statistics.median(s["steps"] for s in res))
+          "· 호연", sum(1 for s in res if s["hof3"]), "· 신오", sum(1 for s in res if s["hof4"]), "/", n, "| 행동 중앙값", statistics.median(s["steps"] for s in res))

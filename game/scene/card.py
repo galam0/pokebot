@@ -7,6 +7,7 @@ from .. import data as D
 from .. import engine as E
 from .. import hoenn as HO
 from .. import johto as J
+from .. import sinnoh as SN
 from .. import kanto as K
 
 from .badge import (BADGE_RGB, _badge)
@@ -39,7 +40,7 @@ def menu(info: dict, get_sprite: SpriteGetter | None = None) -> bytes:
     # 제목
     _pokeball(d, 22, 20, 13)
     _text(d, (40, 4), "포켓몬 모험", font=TITLE, fill=(255, 220, 72), shadow=(40, 32, 96))
-    sub = "관동 · 성도 · 호연"
+    sub = "관동 · 성도 · 호연 · 신오"
     _text(d, (W - _tw(sub, SMALL) - 8, 10), sub, font=SMALL, fill=(208, 220, 255), shadow=(24, 32, 72))
 
     # 왼쪽: 트레이너 카드
@@ -48,7 +49,7 @@ def menu(info: dict, get_sprite: SpriteGetter | None = None) -> bytes:
     if public:
         _text(d, (14, 40), "트레이너 카드", font=BOLD, fill=(255, 255, 255), shadow=(150, 40, 32))
         lines = ["버튼을 눌러 시작해요!", "모험: 배지 8개 → 챔피언",
-                 "관동 챔피언이 되면 성도로,", "성도 챔피언이 되면 호연으로"]
+                 "관동 → 성도 → 호연 → 신오", "챔피언이 되면 다음 지방으로"]
         for i, t in enumerate(lines):
             _text(d, (14, 58 + i * 13), t, font=SMALL, fill=INK)
     else:
@@ -57,9 +58,9 @@ def menu(info: dict, get_sprite: SpriteGetter | None = None) -> bytes:
         dex = f"도감 {info.get('dex', 0)}"
         _text(d, (160 - _tw(dex, SMALL), 41), dex, font=SMALL, fill=(255, 240, 220), shadow=(150, 40, 32))
         rows = [("관동", K.GYM_ORDER, BADGE_RGB, "hof"), ("성도", J.GYM_ORDER, J.BADGE_RGB, "hof2"),
-                ("호연", HO.GYM_ORDER, HO.BADGE_RGB, "hof3")]
+                ("호연", HO.GYM_ORDER, HO.BADGE_RGB, "hof3"), ("신오", SN.GYM_ORDER, SN.BADGE_RGB, "hof4")]
         for i, (rn, order, pal, hk) in enumerate(rows):
-            y = 57 + i * 19
+            y = 55 + i * 15
             _text(d, (14, y), rn, font=SMALL, fill=(88, 72, 64))
             for j, g in enumerate(order):
                 _badge(d, 40 + j * 14, y - 1, j, bool(run) and g in run["badges"], pal)

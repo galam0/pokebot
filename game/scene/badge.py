@@ -3,6 +3,7 @@
 from .. import adventure as A
 from .. import hoenn as HO
 from .. import johto as J
+from .. import sinnoh as SN
 from .. import kanto as K
 
 from .base import (_panel)
@@ -44,7 +45,7 @@ def _badge(d, x, y, i: int, got: bool, palette=None):
 
 def _badge_case(d, x, y, run: dict):
     """지금 있는 지방의 배지 8개"""
-    mod = {"kanto": None, "johto": J, "hoenn": HO}[A.region_of(run["loc"])]
+    mod = {"kanto": None, "johto": J, "hoenn": HO, "sinnoh": SN}[A.region_of(run["loc"])]
     order, palette = (mod.GYM_ORDER, mod.BADGE_RGB) if mod else (K.GYM_ORDER, BADGE_RGB)
     _panel(d, (x, y, x + 8 * 16 + 6, y + 18), fill=(56, 48, 72), edge=(24, 20, 32))
     for i, g in enumerate(order):

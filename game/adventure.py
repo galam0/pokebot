@@ -1,4 +1,4 @@
-"""관동 → 성도 모험 모드 (도로·체육관·사천왕). 배틀 자체는 engine을 그대로 쓰고, 여기서는 '필드'와 배틀 앞뒤를 다룬다.
+"""관동 → 성도 → 호연 → 신오 모험 모드 (도로·체육관·사천왕). 배틀 자체는 engine을 그대로 쓰고, 여기서는 '필드'와 배틀 앞뒤를 다룬다.
 
 run (모험) = engine의 run 필드 + {
   "mode": "adventure", "phase": "field" | "battle" | "switch" | "learn",
@@ -17,16 +17,22 @@ from . import engine as E
 from . import hoenn as H
 from . import johto as J
 from . import kanto as K
+from . import sinnoh as S
 
-LOC = {**K.LOCATIONS, **J.LOCATIONS, **H.LOCATIONS}        # 관동 + 성도 + 호연 (키가 겹치지 않음)
+LOC = {**K.LOCATIONS, **J.LOCATIONS, **H.LOCATIONS, **S.LOCATIONS}   # 관동 + 성도 + 호연 + 신오 (키가 겹치지 않음)
 LOC["olivine"]["links"].append("h_ferry")                  # 담청시티 항구 → 호연행 배
-GYMS = {**K.GYMS, **J.GYMS, **H.GYMS}
+LOC["lilycove"]["links"].append("s_ferry")                 # 해안시티 항구 → 신오행 배
+GYMS = {**K.GYMS, **J.GYMS, **H.GYMS, **S.GYMS}
 # 지방 순서대로. hof: 그 지방 챔피언 횟수가 저장된 키, start: 처음 들어올 때 파티·PC를 맞출 레벨
 REGIONS = {
     "kanto": {"n": "관동", "order": K.GYM_ORDER, "caps": K.LEVEL_CAPS, "hof": "hof", "start": None},
     "johto": {"n": "성도", "order": J.GYM_ORDER, "caps": J.LEVEL_CAPS, "hof": "hof2", "start": J.START_LEVEL},
     "hoenn": {"n": "호연", "order": H.GYM_ORDER, "caps": H.LEVEL_CAPS, "hof": "hof3", "start": H.START_LEVEL},
+    "sinnoh": {"n": "신오", "order": S.GYM_ORDER, "caps": S.LEVEL_CAPS, "hof": "hof4", "start": S.START_LEVEL},
 }
+CHAMP_NEED = {True: ("hof", "관동"), "champ": ("hof", "관동"), "champ2": ("hof2", "성도"), "champ3": ("hof3", "호연"),
+              "champ4": ("hof4", "신오")}   # 장소·전설 조건 → (챔피언 횟수 키, 지방 이름)
+LEAGUE_MOD = {"johto": J, "hoenn": H, "sinnoh": S}
 REGION_ORDER = list(REGIONS)
 
 START = "pallet"
@@ -122,7 +128,7 @@ def new_adventure(starter: int, rng: random.Random | None = None, name: str = ""
 
 def normalize(run: dict) -> dict:
     for k, v in (("loc", START), ("center", START), ("badges", []), ("box", []), ("done", {}), ("flags", []),
-                 ("hof", 0), ("hof2", 0), ("hof3", 0), ("battle", None), ("name", ""), ("chain", [])):
+                 ("hof", 0), ("hof2", 0), ("hof3", 0), ("hof4", 0), ("battle", None), ("name", ""), ("chain", [])):
         run.setdefault(k, v)
     for m in run["box"]:
         m.setdefault("pend", [])
@@ -135,10 +141,10 @@ def normalize(run: dict) -> dict:
 # ---------- 이동 ----------
 def can_enter(run: dict, key: str) -> tuple[bool, str]:
     L = LOC[key]
-    if L.get("champ") == "champ2" and not run.get("hof2"):
-        return False, "성도 챔피언이 되면 갈 수 있어요"
-    if L.get("champ") and not run.get("hof"):
-        return False, "관동 챔피언이 되면 갈 수 있어요"
+    if L.get("champ"):
+        hk, rn = CHAMP_NEED[L["champ"]]
+        if not run.get(hk):
+            return False, f"{rn} 챔피언이 되면 갈 수 있어요"
     need = L.get("need", 0)
     region = region_of(key)
     if len(region_badges(run, region)) < need:
@@ -241,6 +247,11 @@ def _kanto_rival_team(run: dict, stage: int) -> list[tuple[int, int]]:
 
 
 def start_rival(run: dict, stage, rng: random.Random) -> list[str]:
+    if isinstance(stage, str) and stage.startswith("s"):   # 신오: 용식 (s1~, 플라티나 원본 팀)
+        kind = starter_kind(run.get("starter4") or run["starter"])
+        spec = {"kind": "rival", "cls": S.RIVAL, "name": S.RIVAL, "team": S.rival_team(stage, kind),
+                "line": S.RIVAL_LINE[stage], "stage": stage, "iv": 20}
+        return _start_trainer(run, spec, rng)
     if isinstance(stage, str):   # 성도: 실버 (j1~), 호연: 봄이 (h1~)
         mod, rivals, mine = (J, JOHTO_RIVAL, "starter2") if stage.startswith("j") else (H, HOENN_RIVAL, "starter3")
         line = rivals[starter_kind(run.get(mine) or run["starter"])]
@@ -309,8 +320,8 @@ def league_info(run: dict) -> tuple[str | None, bool, str]:
     lg = loc(run).get("league")
     if not lg:
         return None, False, ""
-    if lg == "hoenn":   # 그랜드시티
-        return "hoenn", len(region_badges(run, "hoenn")) >= 8, "호연 배지 8개가 필요해요"
+    if lg in ("hoenn", "sinnoh"):   # 그랜드시티 · 신오 포켓몬리그
+        return lg, len(region_badges(run, lg)) >= 8, f"{REGIONS[lg]['n']} 배지 8개가 필요해요"
     kb, jb = len(region_badges(run, "kanto")), len(region_badges(run, "johto"))
     if not run.get("hof"):
         return "kanto", kb >= 8, "관동 배지 8개가 필요해요"
@@ -328,8 +339,8 @@ def challenge_league(run: dict, rng: random.Random | None = None) -> list[str]:
     league, ok, _ = league_info(run)
     if run["phase"] != "field" or not ok:
         raise ValueError("league closed")
-    if league in ("johto", "hoenn"):
-        mod = J if league == "johto" else H
+    if league in LEAGUE_MOD:
+        mod = LEAGUE_MOD[league]
         specs = [{"kind": "e4", "cls": "사천왕", "name": e["n"], "team": e["team"], "line": e["line"], "iv": 31,
                   "league": league} for e in mod.ELITE_FOUR]
         c = mod.CHAMPION
@@ -366,8 +377,7 @@ def legend_available(run: dict) -> tuple[int, int] | None:
     for sid, lv, cond in loc(run).get("legend", []):
         if f"legend:{run['loc']}:{sid}" in run["flags"] or f"legend:{run['loc']}" in run["flags"]:
             continue
-        if ((cond == "champ" and not run.get("hof")) or (cond == "champ2" and not run.get("hof2"))
-                or (cond == "champ3" and not run.get("hof3"))):
+        if cond and not run.get(CHAMP_NEED[cond][0]):
             continue
         return sid, lv
     return None
@@ -415,7 +425,7 @@ def take_gift_choice(run: dict, sid: int, rng: random.Random | None = None) -> l
     mon["iv"] = [max(iv, 20) for iv in mon["iv"]]
     mon["hp"] = E.max_hp(mon)
     run["flags"].append(f"gift:{run['loc']}")
-    run["starter2" if region_of(run["loc"]) == "johto" else "starter3"] = sid
+    run[{"johto": "starter2", "hoenn": "starter3", "sinnoh": "starter4"}[region_of(run["loc"])]] = sid
     run.setdefault("caught_list", []).extend([sid, mon["sid"]])
     msgs = [g[2], f"🎁 **{D.name(mon['sid'])}** Lv.{mon['lv']}을(를) 받았다!"] + add_caught(run, mon)
     run["log"] = msgs
@@ -553,6 +563,7 @@ RIVAL_LOSE = {   # 라이벌에게 이겼을 때 한마디
     "그린": "쳇... 다음엔 안 질 거다! 기억해 둬!",
     "실버": "...흥. 약한 포켓몬 탓이 아니야. 다음엔 더 강해져서 돌아오겠어.",
     "봄이": "와, 정말 강하다! 나도 포켓몬이랑 더 열심히 할게!",
+    "용식": "으아아, 졌다! 다음엔 진짜 진짜 안 진다! 벌금이다!",
 }
 
 
@@ -594,7 +605,7 @@ def _victory(run: dict, rng: random.Random, caught: bool) -> list[str]:
             g = GYMS[b["gym"]]
             run["badges"].append(b["gym"])
             sync_caps(run)
-            region = "hoenn" if b["gym"] in H.GYMS else ("johto" if b["gym"] in J.GYMS else "kanto")
+            region = next(r for r, R in REGIONS.items() if b["gym"] in R["order"])
             msgs.append(f"🎖️ **{g['badge']}**를 받았다! ({REGIONS[region]['n']} 배지 {len(region_badges(run, region))}개)")
             msgs.append(f"이제 Lv.{level_cap(run)}까지 말을 들어요.")
             tm = f"tm{g['tm']}"
@@ -602,12 +613,20 @@ def _victory(run: dict, rng: random.Random, caught: bool) -> list[str]:
             msgs.append(f"{g['leader']}: \"이 기술머신도 가져가!\" → 🎒 **{E.item_name(tm)}**")
         elif kind == "champion":
             E.heal_party(run)
-            if b.get("league") == "hoenn":
+            if b.get("league") == "sinnoh":
+                run["hof4"] = run.get("hof4", 0) + 1
+                sync_caps(run)
+                msgs.append(f"🏆 **축하합니다! 신오 포켓몬 리그 챔피언이 되었다!** (전당 등록 {run['hof4']}번째)")
+                if run["hof4"] == 1:
+                    msgs.append("이제 레벨 제한이 없어졌다! 신오의 세 호수와 **선단신전**에서 강한 기운이 느껴진다... "
+                                "포켓몬리그 북쪽 **하드마운틴**과 **만월섬**에도 갈 수 있게 됐다!")
+            elif b.get("league") == "hoenn":
                 run["hof3"] = run.get("hof3", 0) + 1
                 sync_caps(run)
                 msgs.append(f"🏆 **축하합니다! 호연 포켓몬 리그 챔피언이 되었다!** (전당 등록 {run['hof3']}번째)")
                 if run["hof3"] == 1:
-                    msgs.append("이제 레벨 제한이 없어졌다! 황금마을 근처 **고대 석실**에서 오래된 기운이 느껴진다...")
+                    msgs.append("🚢 **해안시티** 항구에서 **신오 지방**으로 가는 배를 탈 수 있게 됐다! "
+                                "황금마을 근처 **고대 석실**에서도 오래된 기운이 느껴진다...")
             elif b.get("league") == "johto":
                 run["hof2"] = run.get("hof2", 0) + 1
                 sync_caps(run)

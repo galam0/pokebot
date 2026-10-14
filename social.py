@@ -67,7 +67,7 @@ def _frozen(view):
 # =====================================================================
 def _players() -> list[tuple[int, dict, int]]:
     rows = storage.adventure_rows()
-    return sorted(rows, key=lambda r: (-r[1].get("hof3", 0), -r[1].get("hof2", 0), -r[1].get("hof", 0),
+    return sorted(rows, key=lambda r: (-r[1].get("hof4", 0), -r[1].get("hof3", 0), -r[1].get("hof2", 0), -r[1].get("hof", 0),
                                        -len(r[1]["badges"]), -r[2]))
 
 
