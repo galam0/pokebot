@@ -1,6 +1,6 @@
 """포켓몬 디스코드 봇.
 
-- 모험: 관동 지방을 돌아다니며 체육관 배지 8개 → 사천왕·챔피언 (계속 저장, /초기화로 처음부터)
+- 모험: 관동 → 성도 → 호연을 돌아다니며 배지 8개 → 사천왕·챔피언 (계속 저장, /초기화로 처음부터)
 - 데일리·주간 챌린지: PokeRogue식 웨이브 게임 (모두 같은 조건, 랭킹)
 """
 
@@ -24,7 +24,6 @@ from game import adventure as A
 from game import data as D
 from game import engine as E
 from game import heroes as H
-from game import kanto as K
 from game import scene
 from game.text import josa
 
@@ -288,7 +287,7 @@ async def show(interaction: discord.Interaction, run: dict, make, send: bool = F
     if in_thread:
         # 이어하기도 새 게임처럼 전용 스레드에서 (못 만들면 아래에서 지금 채널에)
         await post_in_thread(interaction, thread_name, content or sc.content, [sc.embed], sc.view,
-                             [file] if file else [])
+                             [file] if file else [], run=run)
     elif send:
         kwargs = {"file": file} if file else {}
         await interaction.response.send_message(content=content or sc.content, embed=sc.embed, view=sc.view,
@@ -355,20 +354,35 @@ async def send_summary(interaction: discord.Interaction, run: dict, index: int |
 
 
 # ---------- 스레드 ----------
+def _game_thread(interaction: discord.Interaction, run: dict | None) -> discord.Thread | None:
+    """이 게임을 하던 스레드 (같은 채널 아래에 있고 아직 잠기지 않았으면 다시 쓴다)"""
+    tid = (run or {}).get("thread")
+    th = bot.get_channel(tid) if tid else None
+    if isinstance(th, discord.Thread) and th.parent_id == interaction.channel_id and not th.locked:
+        return th
+    return None
+
+
 async def post_in_thread(interaction: discord.Interaction, thread_name: str, content: str | None,
-                         embeds: list[discord.Embed], view: discord.ui.View, files: list[discord.File] = ()):
-    """게임 전용 스레드를 만들어 그 안에 올린다. 스레드를 못 만들면(권한·DM 등) 지금 채널에 바로 올린다."""
+                         embeds: list[discord.Embed], view: discord.ui.View, files: list[discord.File] = (),
+                         run: dict | None = None):
+    """게임 전용 스레드에 올린다 (이어하기면 하던 스레드, 아니면 새로 만든다).
+    스레드를 못 만들면(권한·DM 등) 지금 채널에 바로 올린다."""
     ch = interaction.channel
     kwargs = {"files": list(files)} if files else {}
     if isinstance(ch, discord.TextChannel):
-        try:
-            thread = await ch.create_thread(name=thread_name[:90], type=discord.ChannelType.public_thread,
-                                            auto_archive_duration=1440)
-        except Exception as ex:   # 권한이 없으면 지금 채널에서
-            log.info("스레드를 못 만들어서 채널에 올려요: %s", short_error(ex))
-        else:
+        thread, reused = _game_thread(interaction, run), True
+        if thread is None:
+            reused = False
+            try:
+                thread = await ch.create_thread(name=thread_name[:90], type=discord.ChannelType.public_thread,
+                                                auto_archive_duration=1440)
+            except Exception as ex:   # 권한이 없으면 지금 채널에서
+                log.info("스레드를 못 만들어서 채널에 올려요: %s", short_error(ex))
+        if thread is not None:
             # 3초 제한: 그림 올리기(느림)보다 응답을 먼저 보낸다
-            await interaction.response.send_message(f"🎮 {thread.mention} 에서 게임을 시작했어요!", ephemeral=True)
+            await interaction.response.send_message(
+                f"🎮 {thread.mention} 에서 " + ("이어서 해요!" if reused else "게임을 시작했어요!"), ephemeral=True)
             try:
                 await thread.send(content=content, embeds=embeds, view=view, **kwargs)
             except Exception as ex:
@@ -413,6 +427,12 @@ async def intro_file() -> discord.File | None:
         return None
 
 
+def _thread_title(name: str, mode: str) -> str:
+    if mode == "adventure":
+        return f"{name}의 포켓몬 모험"
+    return f"{name}의 {ui.MODE_KO[mode].split(' ', 1)[1]} {period_of(mode)}"
+
+
 async def start_game(interaction: discord.Interaction, mode: str):
     """모험 / 데일리 / 주간 챌린지 시작 화면"""
     user = interaction.user
@@ -420,7 +440,7 @@ async def start_game(interaction: discord.Interaction, mode: str):
     slot = ui.slot_of(uid, mode)
     run = await get_run(uid, mode)
     if run and run["phase"] in ACTIVE:
-        await show(interaction, run, _main(slot, name, run), send=True, thread_name=f"{name}의 관동 모험"[:90],
+        await show(interaction, run, _main(slot, name, run), send=True, thread_name=_thread_title(name, mode),
                    content="모험을 이어서 해요!" if mode == "adventure" else
                    "진행 중인 게임이 있어요! 이어서 하거나, 🏳️ 포기 후 새로 시작할 수 있어요.")
         return
@@ -431,7 +451,7 @@ async def start_game(interaction: discord.Interaction, mode: str):
         content, embeds, view = ui.adventure_intro_screen(slot, image=bool(files))
         sprites.prefetch(trainers=[k for k, *_ in H.HEROES])
         sprites.prefetch(backs=ui.REGIONS["관동"] + [4, 7, 1])
-        title = f"{name}의 관동 모험"
+        title = _thread_title(name, mode)
     else:
         period = period_of(mode)
         done = storage.has_result(mode, period, uid)
@@ -445,7 +465,7 @@ async def start_game(interaction: discord.Interaction, mode: str):
         starters = E.daily_starters(period) if mode == "daily" else E.challenge_starters(period)
         content, embeds, view = ui.mode_start_screen(slot, mode, period, starters)
         sprites.prefetch(backs=starters)
-        title = f"{name}의 {ui.MODE_KO[mode].split(' ', 1)[1]} {period}"
+        title = _thread_title(name, mode)
     await post_in_thread(interaction, title, content or None, embeds, view, files)
 
 
@@ -506,7 +526,8 @@ async def menu_action(interaction: discord.Interaction, act: str):
             await interaction.response.edit_message(content="지울 모험이 없어요.", embeds=[], view=None)
             return
         async with storage.lock(uid):
-            await storage.delete_run(uid, "adventure")
+            storage.cache_run(uid, "adventure", None)
+        _bg(storage.delete_run(uid, "adventure"), "모험 초기화")
         log.info("모험 초기화: %s", user)
         await interaction.response.edit_message(
             content="🗑️ 모험을 초기화했어요. `/스타팅`으로 오박사 연구소에서 다시 시작할 수 있어요. (도감 기록은 남아 있어요)",
@@ -590,6 +611,7 @@ async def handle_component(interaction: discord.Interaction, custom_id: str):
 
     async with storage.lock(uid):
         run = await get_run(uid, mode)
+        in_thread = isinstance(interaction.channel, discord.Thread)
 
         # --- 스타팅 고르기 (게임이 없을 때) ---
         if act in ("starter", "new", "region", "hero", "heropick"):
@@ -631,6 +653,8 @@ async def handle_component(interaction: discord.Interaction, custom_id: str):
                     return await notify_failure(interaction, "고를 수 없는 포켓몬이에요.")
                 run = E.new_run(sid, rng, mode, seed)
             run["ver"] = 1
+            if in_thread:   # 이어하기 때 이 스레드를 다시 쓴다
+                run["thread"] = interaction.channel_id
             storage.cache_run(uid, mode, run)
             record_dex(uid, run)
             await show(interaction, run, _main(slot, name, run))
@@ -798,6 +822,8 @@ async def handle_component(interaction: discord.Interaction, custom_id: str):
             return
 
         run["ver"] = run.get("ver", 0) + 1
+        if in_thread:
+            run["thread"] = interaction.channel_id
         if run.get("loc") != loc_before:   # 지고 센터로 돌아가는 등 장소가 바뀌면 바깥 장면
             run.pop("place", None)
         record_dex(uid, run)

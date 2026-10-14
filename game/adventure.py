@@ -268,7 +268,7 @@ def fight_trainer(run: dict, rng: random.Random | None = None) -> list[str]:
     cls, team = loc(run)["trainers"][i]
     spec = {"kind": "trainer", "cls": cls, "name": _trainer_name(cls, run["loc"], i), "team": team,
             "idx": i, "loc": run["loc"], "line": random.Random(f"{run['loc']}:{i}:l").choice(TRAINER_LINES),
-            "iv": 20 if (" " in cls or region_of(run["loc"]) == "johto") else 10}
+            "iv": 20 if (" " in cls or region_of(run["loc"]) != "kanto") else 10}
     run["log"] = _start_trainer(run, spec, rng)
     return run["log"]
 

@@ -14,7 +14,6 @@ from game import adventure as A
 from game import data as D
 from game import engine as E
 from game import heroes as H
-from game import kanto as K
 from game.text import josa
 
 TYPE_COLOR = {10: 0xEE8130, 11: 0x6390F0, 12: 0x7AC74C}
@@ -850,7 +849,8 @@ HELP = {   # 주제: (메뉴 이름, 이모지, 한 줄 설명, [(제목, 내용
         ("잡기", "야생 포켓몬에게 볼을 던져요. HP가 적을수록, 상태이상일수록 잘 잡혀요. 다른 트레이너의 포켓몬은 못 잡아요."),
         ("상태이상", "마비·화상·독·얼음 상태가 되면 정보창 HP 아래에 표시돼요. 센터나 회복약으로 고쳐요."),
         ("트레이너 등장", "트레이너·관장·라이벌과 싸울 때는 먼저 상대가 나와서 대사를 해요. ⚔️ 승부!를 누르면 포켓몬이 나와요."),
-        ("배틀 화면", "배틀 화면은 움직이는 그림(GIF)이에요. 1~5세대는 블랙·화이트처럼 움직이고, 6세대부터는 통통 뛰어요."),
+        ("배틀 화면", "배틀 화면은 움직이는 그림(GIF)이에요. 1~9세대 모두 3D 모습으로 움직여요. "
+                    "그림을 아직 못 받았으면 잠깐 멈춘 그림으로 나와요."),
     ]),
     "growth": ("성장·진화", "⬆️", "레벨업·기술·진화·물건", [
         ("레벨업", "상대 포켓몬을 쓰러뜨리면 그 상대와 싸운 포켓몬(한 번이라도 나와 있던 포켓몬)만 경험치를 받아요. "
@@ -934,29 +934,6 @@ def dex_screen(uid: int, trainer: str, dex: dict[int, int], gen: int, page: int,
     return e, _frozen(view)
 
 
-def dex_embed(trainer: str, dex: dict[int, int]) -> discord.Embed:
-    total = len(D.SPECIES)
-    e = discord.Embed(title=f"📖 {trainer}의 도감", color=0x3BA55D,
-                      description=f"잡은 포켓몬 **{len(dex)}** / {total}종 · 관동 도감 "
-                                  f"**{sum(1 for s in dex if s <= 151)}** / 151종")
-    gens = [(1, 151), (152, 251), (252, 386), (387, 493), (494, 649), (650, 721), (722, 809), (810, 905), (906, 1025)]
-    lines = []
-    for g, (a, b) in enumerate(gens, 1):
-        n = sum(1 for s in dex if a <= s <= b)
-        lines.append(f"{g}세대 `{bar(n, b - a + 1, 8)}` {n}/{b - a + 1}")
-    e.add_field(name="세대별", value="\n".join(lines), inline=True)
-    by_type = {t: 0 for t in D.TYPE_KO}
-    for s in dex:
-        for t in D.types(s):
-            by_type[t] += 1
-    top = sorted(by_type.items(), key=lambda kv: -kv[1])[:9]
-    e.add_field(name="많이 잡은 타입", value="\n".join(f"{D.TYPE_KO[t]} {n}" for t, n in top if n) or "-", inline=True)
-    most = sorted(dex.items(), key=lambda kv: (-kv[1], kv[0]))[:10]
-    if most:
-        e.add_field(name="자주 잡은 포켓몬", value=", ".join(f"{D.name(s)}({n})" for s, n in most), inline=False)
-    return e
-
-
 def period_board_embed(title: str, rows: list[dict], me: int, extra: str = "") -> discord.Embed:
     e = discord.Embed(title=title, color=0xF1C40F, description=extra or None)
     medals = ["🥇", "🥈", "🥉"]
@@ -971,7 +948,7 @@ def period_board_embed(title: str, rows: list[dict], me: int, extra: str = "") -
 
 def adventure_board(rows: list[tuple[int, dict, int]], me: int) -> discord.Embed:
     """모험 랭킹. rows: (유저, 모험 상태, 도감 수) — 챔피언 횟수 → 배지 → 도감 순"""
-    e = discord.Embed(title="🗺️ 관동 모험 랭킹", color=0x3BA55D)
+    e = discord.Embed(title="🗺️ 모험 랭킹", color=0x3BA55D)
     rows = sorted(rows, key=lambda r: (-r[1].get("hof3", 0), -r[1].get("hof2", 0), -r[1].get("hof", 0),
                                        -len(r[1]["badges"]), -r[2]))
     mine = next(((i, r) for i, r in enumerate(rows) if r[0] == me), None)
