@@ -5,6 +5,7 @@
 """
 
 import asyncio
+import time
 import io
 import logging
 import os
@@ -280,8 +281,16 @@ def _is_battle_scene(run: dict) -> bool:
     return run["phase"] not in ("field", "reward") and not (run.get("battle") or {}).get("intro")
 
 
+_gif_pause_until = 0.0   # 디스코드(클라우드플레어)가 429를 주면 잠시 GIF 바꿔 끼우기를 쉰다 (계속 두드리면 더 오래 막힌다)
+
+
 async def _animate(interaction: discord.Interaction, run: dict, embed: discord.Embed, seq: int):
-    """배틀 화면의 멈춘 그림을 움직이는 GIF로 바꿔 끼운다. 그사이 화면이 바뀌었으면(다음 턴·가방 등) 버린다."""
+    """배틀 화면의 멈춘 그림을 움직이는 GIF로 바꿔 끼운다. 그사이 화면이 바뀌었으면(다음 턴·가방 등) 버린다.
+    버튼 메시지는 봇 계정 경로(채널 메시지 수정)로 바꾼다: 인터랙션 웹후크 경로(edit_original_response)는
+    Render 공유 IP에서 클라우드플레어 429로 막힌다 (로그에서 확인)."""
+    global _gif_pause_until
+    if time.monotonic() < _gif_pause_until:
+        return
     uid = interaction.user.id
     p, e = E.lead(run), run.get("e")
     await sprites.ensure(anims=[e["sid"]] if e else [], anim_backs=[p["sid"]], timeout=4.0)
@@ -292,7 +301,18 @@ async def _animate(interaction: discord.Interaction, run: dict, embed: discord.E
         return
     embed = embed.copy()
     embed.set_image(url=f"attachment://{gif.filename}")
-    await interaction.edit_original_response(embeds=[embed], attachments=[gif])
+    msg = interaction.message
+    try:
+        if msg is not None and not msg.flags.ephemeral:
+            await msg.edit(embeds=[embed], attachments=[gif])
+        else:   # 슬래시 명령어 응답·나만 보이는 메시지는 웹후크 경로뿐
+            await interaction.edit_original_response(embeds=[embed], attachments=[gif])
+    except discord.HTTPException as ex:
+        if ex.status == 429:
+            _gif_pause_until = time.monotonic() + 600
+            log.warning("배틀 GIF: 429라서 10분 동안 멈춘 그림만 보여줘요")
+            return
+        raise
 
 
 def _main(slot: str, trainer: str, run: dict):
@@ -934,6 +954,7 @@ async def main():
                 if e.status != 429:
                     raise
                 log.warning("디스코드 로그인이 잠시 막혔어요 (429). %d초 뒤에 다시 시도해요.", delay)
+                await bot.http.close()   # 실패한 로그인의 연결을 닫는다 (안 닫으면 'Unclosed client session'이 쌓인다)
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, 600)
         await bot.connect()

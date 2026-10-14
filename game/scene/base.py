@@ -454,10 +454,20 @@ _ASSETS = Path(__file__).resolve().parents[2] / "assets"
 _img_cache: dict[str, Image.Image | None] = {}
 
 
+_MAP_KEEP = 10   # 맵 그림은 크다 (다 풀면 190MB+): 최근 것만 들고 있는다 (무료 서버 메모리 512MB)
+_map_keys: list[str] = []
+
+
 def _asset(rel: str) -> Image.Image | None:
     if rel not in _img_cache:
         f = _ASSETS / rel
         _img_cache[rel] = Image.open(f).convert("RGBA") if f.exists() else None
+    if rel.startswith("maps/") and _img_cache[rel] is not None:
+        if rel in _map_keys:
+            _map_keys.remove(rel)
+        _map_keys.append(rel)
+        while len(_map_keys) > _MAP_KEEP:
+            _img_cache.pop(_map_keys.pop(0), None)
     return _img_cache[rel]
 
 
