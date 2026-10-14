@@ -180,6 +180,16 @@ def _party_sids(run: dict) -> list[int]:
     return [m["sid"] for m in run["party"]]
 
 
+GIF_SLOW_SEC = 2.0        # 배틀 GIF를 응답 안에서 만드는 데 이보다 오래 걸리면 한동안 멈춘 그림으로
+_gif_slow_until = 0.0
+
+
+def _note_slow_gif(sec: float):
+    global _gif_slow_until
+    _gif_slow_until = time.monotonic() + 300
+    log.warning("배틀 GIF가 %.1f초 걸려서 5분 동안 멈춘 그림으로 응답해요", sec)
+
+
 async def render(run: dict, kind: str = "scene", animate: bool = False, **kwargs) -> discord.File | None:
     """화면 그림. kind: scene(배틀/보상) / party / summary / path. 실패하면 None → 글자 화면으로 대신 보여준다."""
     try:
@@ -228,11 +238,19 @@ async def render(run: dict, kind: str = "scene", animate: bool = False, **kwargs
                                  anim_backs=[p["sid"]], timeout=4.0)
             png = await asyncio.to_thread(scene.battle_gif, run, sprites.get_sprite, sprites.get_anim)
             name = ui.SCENE_GIF
-        else:   # 배틀: 먼저 멈춘 그림 (빠르다)
+        else:   # 배틀: 움직이는 그림을 미리 받아 뒀으면 바로 GIF, 아니면 멈춘 그림 (응답은 3초 안에)
             await sprites.ensure(sids=[e["sid"]] if e else [], backs=[p["sid"]], timeout=1.0)
-            sprites.prefetch(anims=[e["sid"]] if e else [], anim_backs=[p["sid"]])
-            png = await asyncio.to_thread(scene.battle, run, sprites.get_sprite, None, sprites.get_anim)
-            name = ui.SCENE_FILE
+            ready = (e is None or sprites.has_anim(e["sid"], False)) and sprites.has_anim(p["sid"], True)
+            if ready and time.monotonic() >= _gif_slow_until:
+                t0 = time.monotonic()
+                png = await asyncio.to_thread(scene.battle_gif, run, sprites.get_sprite, sprites.get_anim)
+                name = ui.SCENE_GIF
+                if time.monotonic() - t0 > GIF_SLOW_SEC:
+                    _note_slow_gif(time.monotonic() - t0)
+            else:
+                sprites.prefetch(anims=[e["sid"]] if e else [], anim_backs=[p["sid"]])
+                png = await asyncio.to_thread(scene.battle, run, sprites.get_sprite, None, sprites.get_anim)
+                name = ui.SCENE_FILE
         return discord.File(io.BytesIO(png), filename=name)
     except Exception as ex:
         log.warning("그림 실패 (%s): %s", kind, short_error(ex))
@@ -250,7 +268,7 @@ def prefetch_next(run: dict):
         ahead += [w[0] for w in A.loc(run).get("wild", [])]
         ahead += [m["sid"] for m in (run.get("battle") or {}).get("queue", [])[:1]]
     sprites.prefetch(sids=ahead + _party_sids(run), backs=evos + _party_sids(run),
-                     anims=ahead[:2], anim_backs=[E.lead(run)["sid"]])
+                     anims=ahead[:6], anim_backs=_party_sids(run)[:2])
 
 
 async def show(interaction: discord.Interaction, run: dict, make, send: bool = False, ephemeral: bool = False,
@@ -270,7 +288,8 @@ async def show(interaction: discord.Interaction, run: dict, make, send: bool = F
         await interaction.response.edit_message(content=content, embeds=[sc.embed], view=sc.view,
                                                 attachments=[file] if file else [])
     prefetch_next(run)
-    if file and probe.image == "scene" and _is_battle_scene(run):   # 버튼은 이미 나갔고, 움직이는 그림은 뒤에서
+    if file and file.filename == ui.SCENE_FILE and probe.image == "scene" and _is_battle_scene(run):
+        # 멈춘 그림으로 응답했으면 움직이는 그림을 뒤에서 바꿔 끼워 본다 (Render 공유 IP는 429로 막히는 일이 많다)
         _bg(_animate(interaction, run, sc.embed, seq), "배틀 GIF")
 
 

@@ -29,7 +29,7 @@ TRAINER_REMOTE = {"florian": "florian-s", "juliana": "juliana-s"}   # 쇼다운 
 _cache: dict[str, Image.Image | list | None] = {}     # 키 -> 이미지 또는 GIF 프레임 목록 (None = 없는 그림)
 _pending: dict[str, asyncio.Task] = {}
 _anim_keys: deque[str] = deque()   # GIF 프레임은 크니까 최근 것만 들고 있는다
-ANIM_KEEP = 16
+ANIM_KEEP = 24
 _session: aiohttp.ClientSession | None = None
 _sprite_names: dict | None = None
 
@@ -81,8 +81,8 @@ def _frames(img: Image.Image) -> list[tuple[Image.Image, int]]:
         return frames
     box = (min(b[0] for b in boxes), min(b[1] for b in boxes), max(b[2] for b in boxes), max(b[3] for b in boxes))
     frames = [(f.crop(box), ms) for f, ms in frames]
-    # 3D 그림은 프레임이 100개 넘는 것도 있다: 배틀 GIF 간격(80ms)·최대 길이(1.6초)로 미리 줄여 메모리를 아낀다
-    step, total = 80, min(1600, sum(ms for _, ms in frames))
+    # 3D 그림은 프레임이 100개 넘는 것도 있다: 배틀 GIF 간격(100ms)·최대 길이(1.2초)로 미리 줄여 메모리를 아낀다
+    step, total = 100, min(1200, sum(ms for _, ms in frames))
     out, t, i, acc = [], 0, 0, frames[0][1]
     while t < total:
         while t >= acc and i < len(frames) - 1:
@@ -173,6 +173,11 @@ def get_sprite(sid: int, back: bool) -> Image.Image | None:
 
 def get_item(name: str) -> Image.Image | None:
     return _cache.get(f"item:{name}")
+
+
+def has_anim(sid: int, back: bool) -> bool:
+    """움직이는 그림을 이미 받아 뒀나 (받는 중·없음이면 False)"""
+    return get_anim(sid, back) is not None
 
 
 def get_anim(sid: int, back: bool) -> list[tuple[Image.Image, int]] | None:

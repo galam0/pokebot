@@ -189,10 +189,10 @@ def battle(run: dict, get_sprite: SpriteGetter | None = None, message: list[str]
     return _png(base)
 
 
-GIF_STEP = 80          # 프레임 간격 (ms)
+GIF_STEP = 100         # 프레임 간격 (ms)
 
 
-GIF_MAX_MS = 1600      # 한 바퀴 최대 길이 (프레임이 많으면 만들기·올리기가 느리다)
+GIF_MAX_MS = 1200      # 한 바퀴 최대 길이: 12프레임 (무료 서버에서 버튼 응답 3초 안에 만들어야 한다)
 
 
 GIF_IDLE_MS = 1200     # 움직이는 그림이 없을 때 숨쉬기 한 바퀴
