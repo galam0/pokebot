@@ -280,6 +280,17 @@ def _gauge_rows(d, x0, x1, y, ratio, colors):
             d.line((x0, y + i, fill_to, y + i), fill=colors[k])
 
 
+def _star(d, cx: int, cy: int, r: int = 4, fill=(255, 208, 48)):
+    """이로치 표시 별 (작은 캔버스 좌표)"""
+    import math
+    pts = []
+    for k in range(10):
+        a = -math.pi / 2 + k * math.pi / 5
+        rr = r if k % 2 == 0 else r * 0.45
+        pts.append((cx + rr * math.cos(a), cy + rr * math.sin(a)))
+    d.polygon(pts, fill=fill, outline=(160, 96, 16))
+
+
 def _hp_gauge(d, x, y, w, ratio):
     """[HP|■■■■■□□] 캡슐 모양 HP 게이지 (높이 9)"""
     d.rounded_rectangle((x, y, x + w, y + 8), radius=2, fill=_GAUGE_FRAME)
@@ -425,7 +436,7 @@ def _party_strip(im, d, run: dict, get_sprite, x0: int, y0: int):
         m = run["party"][i]
         if i == run["active"]:
             d.rounded_rectangle((sx + 1, y0 + 3, sx + slot - 1, y0 + 57), radius=3, fill=(255, 244, 208), outline=(216, 168, 72))
-        sp = _sprite(get_sprite, m["sid"], False)
+        sp = _sprite(get_sprite, D.skey(m), False)
         if m["hp"] <= 0:
             sp = sp.convert("LA").convert("RGBA")
         _put(im, d, sp, sx + slot // 2, y0 + 36, slot - 6, 32)

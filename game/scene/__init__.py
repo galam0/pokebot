@@ -88,3 +88,7 @@ from .team import (
     party,
     summary,
 )  # noqa: F401
+from .hof import (
+    hall_of_fame,
+    trade,
+)  # noqa: F401

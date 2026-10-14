@@ -21,6 +21,8 @@ log = logging.getLogger("pokebot.db")
 _pool: asyncpg.Pool | None = None
 _runs: dict[tuple[int, str], dict | None] = {}          # (유저, 모드) -> 진행 중인 게임
 _dex: dict[int, dict[int, int]] = {}                       # 유저 -> {종 번호: 잡은 횟수}
+_shiny: dict[int, set[int]] = {}                           # 유저 -> 이로치로 잡은 종
+_pvp: dict[int, dict[str, int]] = {}                       # 유저 -> {"w": 승, "l": 패, "d": 무}
 _results: dict[tuple[str, str], dict[int, dict]] = {}     # (모드, 기간) -> {유저: 결과}
 _locks: dict[int, asyncio.Lock] = {}
 
@@ -54,6 +56,13 @@ CREATE TABLE IF NOT EXISTS dex (
     caught INT NOT NULL DEFAULT 1,
     first_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (user_id, species)
+);
+ALTER TABLE dex ADD COLUMN IF NOT EXISTS shiny BOOLEAN NOT NULL DEFAULT FALSE;
+CREATE TABLE IF NOT EXISTS pvp (
+    user_id BIGINT PRIMARY KEY,
+    wins INT NOT NULL DEFAULT 0,
+    losses INT NOT NULL DEFAULT 0,
+    draws INT NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS results (
     mode TEXT NOT NULL,
@@ -98,12 +107,17 @@ async def init():
         await con.execute("DELETE FROM runs")
         await con.execute("DELETE FROM games WHERE mode='normal'")   # 예전 로그라이크 일반 게임 (모험으로 바뀜)
         games = await con.fetch("SELECT user_id, mode, state FROM games")
-        dex = await con.fetch("SELECT user_id, species, caught FROM dex")
+        dex = await con.fetch("SELECT user_id, species, caught, shiny FROM dex")
         res = await con.fetch("SELECT * FROM results WHERE at > now() - interval '15 days'")
+        pvp = await con.fetch("SELECT * FROM pvp")
     for r in games:
         _runs[(r["user_id"], r["mode"])] = json.loads(r["state"])
     for r in dex:
         _dex.setdefault(r["user_id"], {})[r["species"]] = r["caught"]
+        if r["shiny"]:
+            _shiny.setdefault(r["user_id"], set()).add(r["species"])
+    for r in pvp:
+        _pvp[r["user_id"]] = {"w": r["wins"], "l": r["losses"], "d": r["draws"]}
     for r in res:
         _results.setdefault((r["mode"], r["period"]), {})[r["user_id"]] = dict(r)
     log.info("DB 연결 완료 (진행 중인 게임 %d개, 도감 %d명, 최근 결과 %d개)", len(games), len(_dex), len(res))
@@ -217,14 +231,49 @@ def dex(user_id: int) -> dict[int, int]:
     return _dex.get(user_id, {})
 
 
-async def add_dex(user_id: int, species: list[int]):
-    if not species:
+def shiny(user_id: int) -> set[int]:
+    """이로치로 잡은 적 있는 종"""
+    return _shiny.get(user_id, set())
+
+
+async def add_dex(user_id: int, species: list[int], shinies: list[int] = ()):
+    if not species and not shinies:
         return
     d = _dex.setdefault(user_id, {})
     for s in species:
         d[s] = d.get(s, 0) + 1
+    new_shiny = [s for s in set(shinies) if s not in _shiny.get(user_id, set())]
+    _shiny.setdefault(user_id, set()).update(shinies)
+    if _pool:
+        async def go(con):
+            if species:
+                await con.executemany(
+                    """INSERT INTO dex(user_id, species) VALUES($1, $2)
+                       ON CONFLICT (user_id, species) DO UPDATE SET caught = dex.caught + 1""",
+                    [(user_id, s) for s in species])
+            if new_shiny:
+                await con.executemany(
+                    """INSERT INTO dex(user_id, species, caught, shiny) VALUES($1, $2, 0, TRUE)
+                       ON CONFLICT (user_id, species) DO UPDATE SET shiny = TRUE""",
+                    [(user_id, s) for s in new_shiny])
+        await _retry(go)
+
+
+# ---------- 유저 대전 전적 ----------
+def pvp(user_id: int) -> dict[str, int]:
+    return _pvp.get(user_id, {"w": 0, "l": 0, "d": 0})
+
+
+async def add_pvp(a: int, b: int, winner: int | None):
+    """a와 b의 대전 결과 (winner가 None이면 무승부)"""
+    rows = []
+    for uid in (a, b):
+        st = _pvp.setdefault(uid, {"w": 0, "l": 0, "d": 0})
+        k = "d" if winner is None else ("w" if uid == winner else "l")
+        st[k] += 1
+        rows.append((uid, int(k == "w"), int(k == "l"), int(k == "d")))
     if _pool:
         await _retry(lambda con: con.executemany(
-            """INSERT INTO dex(user_id, species) VALUES($1, $2)
-               ON CONFLICT (user_id, species) DO UPDATE SET caught = dex.caught + 1""",
-            [(user_id, s) for s in species]))
+            """INSERT INTO pvp(user_id, wins, losses, draws) VALUES($1, $2, $3, $4)
+               ON CONFLICT (user_id) DO UPDATE SET wins = pvp.wins + $2, losses = pvp.losses + $3,
+                 draws = pvp.draws + $4""", rows))

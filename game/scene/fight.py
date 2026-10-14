@@ -14,6 +14,7 @@ from .. import trainer_pics as TP
 from ..text import josa
 
 from .base import (
+    _star,
     BOLD,
     FONT,
     H,
@@ -55,15 +56,16 @@ def _battle_layers(run: dict, message: list[str] | None):
     """배틀 화면을 (배경, 위 칸, 포켓몬 자리)로 나눠 그린다. 포켓몬은 그 사이에 붙인다 (GIF는 프레임마다)."""
     p, e, wave = E.lead(run), run["e"], run["wave"]
     adv = run.get("mode") == "adventure"
-    biome = A.loc(run)["bg"] if adv else E.biome(wave)
+    pvp = run.get("mode") == "pvp"   # 유저 대전
+    biome = A.loc(run)["bg"] if adv else ("챔피언로드" if pvp else E.biome(wave))
     im, d = _canvas()
     _background(d, biome)
     _platform(d, 236, 86, 52, 12, biome)   # 상대 (오른쪽 위)
     _platform(d, 78, 146, 60, 14, biome)   # 나 (왼쪽 아래, 뒷모습)
     actors = []   # (종, 뒷모습?, 가운데 x, 발 y, 쓰러짐?)  — 작은 캔버스 좌표
     if e:
-        actors.append((e["sid"], False, 236, 88, e["hp"] <= 0))
-    actors.append((p["sid"], True, 78, 152, p["hp"] <= 0))
+        actors.append((D.skey(e), False, 236, 88, e["hp"] <= 0))
+    actors.append((D.skey(p), True, 78, 152, p["hp"] <= 0))
 
     ov, d = _layer()
     # 상대 정보창
@@ -76,6 +78,8 @@ def _battle_layers(run: dict, message: list[str] | None):
         tags = _tw("BOSS", BOLD) + 4 if e.get("boss") else 0
         name, nf = _shrink(D.name(e["sid"]), 140 - _tw(lv) - 4 - 12 - tags, (BOLD, FONT, SMALL, TINY))
         _text(d, (12, 12 + (BOLD.size - nf.size) // 6), name, font=nf)
+        if e.get("shiny"):
+            _star(d, 140 - _tw(lv) - 8, 17)
         if e.get("boss"):
             _text(d, (12 + _tw(name, nf) + 4, 12), "BOSS", font=BOLD, fill=(200, 48, 48))
         if e.get("status"):
@@ -100,6 +104,8 @@ def _battle_layers(run: dict, message: list[str] | None):
     lv = f"Lv.{p['lv']}"
     name, nf = _shrink(D.name(p["sid"]), 308 - _tw(lv) - 4 - 178, (BOLD, FONT, SMALL, TINY))
     _text(d, (178, 102 + (BOLD.size - nf.size) // 6), name, font=nf)
+    if p.get("shiny"):
+        _star(d, 308 - _tw(lv) - 8, 107)
     _text(d, (308 - _tw(lv), 102), lv)
     mh = E.max_hp(p)
     r = p["hp"] / mh
@@ -108,9 +114,10 @@ def _battle_layers(run: dict, message: list[str] | None):
     _text(d, (308 - _tw(hp_txt), 123), hp_txt)
     if p.get("status"):   # 상태이상은 HP 숫자 바로 왼쪽 (이름 줄을 넓게 쓰게)
         _status_tag(d, 308 - _tw(hp_txt) - _tw(E.STATUS_KO[p["status"]]) - 10, 122, p["status"])
-    need = E.exp_to_next(p)
-    _text(d, (178, 131), "EXP", fill=(64, 128, 200))
-    _exp_gauge(d, 198, 135, 110, (p["exp"] / need) if need else 1)
+    if not pvp:
+        need = E.exp_to_next(p)
+        _text(d, (178, 131), "EXP", fill=(64, 128, 200))
+        _exp_gauge(d, 198, 135, 110, (p["exp"] / need) if need else 1)
 
     # 웨이브 / 장소 표시 (오른쪽 위 작게)
     if adv:
@@ -125,6 +132,16 @@ def _battle_layers(run: dict, message: list[str] | None):
                 d.ellipse((bx, by, bx + 6, by + 6), fill=(248, 248, 248), outline=(40, 40, 48))
                 d.chord((bx, by, bx + 6, by + 6), 180, 360, fill=(224, 64, 56) if i < left else (128, 128, 136),
                         outline=(40, 40, 48))
+    elif pvp:
+        tag = "VS"
+        _text(d, (W - _tw(tag, BOLD) - 6, 3), tag, font=BOLD, fill=(255, 232, 120), shadow=(0, 0, 0))
+        foes = run.get("foe_party") or []
+        by = e_bottom + 5
+        for i, m in enumerate(foes):   # 상대 파티 (볼)
+            bx = 12 + i * 9
+            d.ellipse((bx, by, bx + 6, by + 6), fill=(248, 248, 248), outline=(40, 40, 48))
+            d.chord((bx, by, bx + 6, by + 6), 180, 360, fill=(224, 64, 56) if m["hp"] > 0 else (128, 128, 136),
+                    outline=(40, 40, 48))
     else:
         tag = f"WAVE {wave}" + (" BOSS" if E.is_boss_wave(wave) else "")
         _text(d, (W - _tw(tag) - 6, 3), tag, fill=(255, 255, 255), shadow=(0, 0, 0))
@@ -361,7 +378,7 @@ def battle_result(run: dict, get_icon: "IconGetter | None" = None, get_sprite: S
         up = bool(g) and m["lv"] > g["lv0"]
         d.rounded_rectangle((x0, y0, x1, y1), radius=5, fill=(255, 248, 220) if up else (248, 248, 240),
                             outline=(216, 168, 72) if up else PANEL_EDGE, width=2 if up else 1)
-        ic = _icon(get_icon, get_sprite, m["sid"])
+        ic = _icon(get_icon, get_sprite, D.skey(m))
         if m["hp"] <= 0:
             ic = ic.convert("LA").convert("RGBA")
         _put(im, d, ic, x0 + 20, y0 + 36, 34, 32)

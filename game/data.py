@@ -34,6 +34,14 @@ def item_name(ident: str) -> str:
 SPRITE_BASE = "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon"
 
 
+SHINY = 10000   # 그림 키: 이로치는 종 번호 + 10000 (그림 받기·그리기에서만 쓴다)
+
+
+def skey(mon: dict) -> int:
+    """그림 키 (이로치면 종 번호 + SHINY)"""
+    return mon["sid"] + (SHINY if mon.get("shiny") else 0)
+
+
 def name(sid: int) -> str:
     return SPECIES[sid]["n"]
 

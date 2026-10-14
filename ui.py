@@ -67,6 +67,11 @@ def exp_line(mon: dict) -> str:
     return f"EXP `{bar(mon['exp'], need)}` {mon['exp']}/{need} (다음 레벨까지 {need - mon['exp']})"
 
 
+def mname(mon: dict) -> str:
+    """포켓몬 이름 (이로치면 ✨)"""
+    return D.name(mon["sid"]) + (" ✨" if mon.get("shiny") else "")
+
+
 def mon_head(mon: dict) -> str:
     st = f" · **{E.STATUS_KO[mon['status']]}**" if mon.get("status") else ""
     return f"{D.type_text(mon['sid'])}{st}"
@@ -248,8 +253,8 @@ def _text_status(embed: discord.Embed, run: dict):
     """그림을 못 붙였을 때 대신 보여줄 글자 상태"""
     e, p = run.get("e"), E.lead(run)
     if e:
-        embed.add_field(name=f"상대 · {D.name(e['sid'])} Lv.{e['lv']}", value=f"{mon_head(e)}\n{hp_line(e)}", inline=False)
-    embed.add_field(name=f"나 · {D.name(p['sid'])} Lv.{p['lv']}", value=f"{mon_head(p)}\n{hp_line(p)}\n{exp_line(p)}",
+        embed.add_field(name=f"상대 · {mname(e)} Lv.{e['lv']}", value=f"{mon_head(e)}\n{hp_line(e)}", inline=False)
+    embed.add_field(name=f"나 · {mname(p)} Lv.{p['lv']}", value=f"{mon_head(p)}\n{hp_line(p)}\n{exp_line(p)}",
                     inline=False)
 
 
@@ -608,6 +613,9 @@ def field_screen(uid: int, trainer: str, run: dict, image: bool = True) -> Scree
     region = A.region_of(run["loc"])
     embed.set_footer(text=f"{A.REGIONS[region]['n']} 배지 {len(A.region_badges(run, region))}/8 · 레벨 제한 {cap} · "
                           f"박스 {len(run['box'])}마리")
+    if run.get("result") and run["result"].get("kind") == "champion" and image:   # 챔피언: 명예의 전당 카드
+        embed.title = "🏆 명예의 전당 · " + embed.title
+        return Screen(embed, _frozen(view), "hof")
     if run.get("result") and image:   # 배틀이 막 끝났으면 결과 (포켓몬마다 얻은 경험치)
         embed.title = "🏅 배틀 결과 · " + embed.title
         return Screen(embed, _frozen(view), "result")
@@ -724,7 +732,7 @@ def party_screen(uid: int, trainer: str, run: dict, image: bool = True) -> Scree
     if image:
         embed.set_image(url=f"attachment://{SCENE_FILE}")
     embed.add_field(name="파티", value="\n".join(
-        f"{i + 1}. {D.name(m['sid'])} Lv.{m['lv']}" + ("" if image else f" {hp_line(m)}")
+        f"{i + 1}. {mname(m)} Lv.{m['lv']}" + ("" if image else f" {hp_line(m)}")
         + (f" · 🎒 {E.item_name(m['held'])}" if m.get("held") else "") for i, m in enumerate(run["party"])), inline=False)
     view = discord.ui.View(timeout=None)
     for i, m in enumerate(run["party"]):
@@ -735,7 +743,7 @@ def party_screen(uid: int, trainer: str, run: dict, image: bool = True) -> Scree
 def mon_detail(trainer: str, run: dict, index: int | None = None, image: bool = False) -> discord.Embed:
     """한 마리 상세 정보. image=True면 능력치·HP는 그림(summary.png)이 보여준다."""
     p = run["party"][run["active"] if index is None else index]
-    e = discord.Embed(title=f"{D.name(p['sid'])} Lv.{p['lv']}",
+    e = discord.Embed(title=f"{mname(p)} Lv.{p['lv']}",
                       description=None if image else f"{mon_head(p)}\n{hp_line(p)}\n{exp_line(p)}",
                       color=TYPE_COLOR.get(D.types(p["sid"])[0], 0x5865F2))
     if not image:
@@ -827,6 +835,8 @@ HELP = {   # 주제: (메뉴 이름, 이모지, 한 줄 설명, [(제목, 내용
         ("모험", "`/메뉴` 내 메뉴 카드와 버튼 · `/스타팅` 모험 시작·이어서 · `/이어하기` 진행 중인 화면 다시 열기\n"
                "`/주인공` 주인공 바꾸기 · `/초기화` 모험 처음부터"),
         ("포켓몬·기록", "`/내포켓몬` 파티 · `/도감` 세대별 그림 도감 · `/기록` 내 기록과 랭킹"),
+        ("다른 트레이너", "`/플레이어` 트레이너 목록 (골라서 기록·파티 보기) · `/프로필` 트레이너 카드\n"
+                     "`/대전 @상대` 모험 파티로 대전 (모두 Lv.50) · `/교환 @상대` 포켓몬 교환"),
         ("데일리·챌린지", "`/데일리` 오늘의 도전 · `/챌린지` 이번 주 도전"),
         ("관리자", "`/세팅` 이 채널에 누구나 쓰는 게임 버튼 패널 올리기"),
         ("도움말", "`/도움말` 이 화면"),
@@ -869,6 +879,18 @@ HELP = {   # 주제: (메뉴 이름, 이모지, 한 줄 설명, [(제목, 내용
                "호연: 가이오가·그란돈·레쿠쟈, 챔피언 후 레지 3마리·라티아스·라티오스\n"
                "모험의 전설은 잘 잡히게 해 뒀고, 쓰러뜨리거나 도망쳐도 다시 만날 수 있어요."),
     ]),
+    "social": ("대전·교환", "🤝", "다른 트레이너와 함께", [
+        ("대전", "`/대전 @상대`로 신청하고 상대가 수락하면 시작해요. 모험 파티 그대로 모두 **Lv.50**으로 맞춰 싸우고, "
+               "모험 파티에는 영향이 없어요. 둘이 각자 자기 줄(🔴/🔵)의 기술을 고르면 턴이 진행되고, "
+               "메뉴에서 교체·항복을 해요. 상대가 3분 넘게 안 고르면 ⏰ 시간 초과 승리를 받을 수 있어요."),
+        ("교환", "`/교환 @상대`로 열고, 각자 메뉴에서 줄 포켓몬(파티·PC)을 고른 뒤 둘 다 ✅ 확정을 누르면 바꿔요. "
+               "받는 쪽 레벨 제한보다 높으면 제한 레벨로 맞춰지고, 윤겔라·근육몬 같은 통신 진화 포켓몬은 바로 진화해요."),
+        ("이로치", "풀숲과 전설 포켓몬은 아주 가끔(1/200) 몸 색깔이 다른 **이로치**로 나와요. "
+                "잡으면 도감에 ✨ 별이 붙어요."),
+        ("명예의 전당", "챔피언이 되면 그 순간의 파티로 명예의 전당 카드가 나와요."),
+        ("플레이어", "`/플레이어`로 모험 중인 트레이너 목록을 보고, 골라서 기록·파티·대전 전적을 볼 수 있어요. "
+                  "카드에서 바로 대전·교환을 신청할 수도 있어요."),
+    ]),
     "waves": ("데일리·챌린지", "📅", "웨이브 게임과 랭킹", [
         ("데일리", "하루에 한 번, 모두가 같은 스타팅 후보·상대·보상으로 도전해요. 가장 멀리 간 웨이브로 오늘의 랭킹이 정해져요."),
         ("주간 챌린지", "주에 한 번, 매주 규칙이 바뀌어요 (단일 타입 / 아이템 금지 / 하드코어 / 레벨 제한). 주간 랭킹을 겨뤄요."),
@@ -902,7 +924,7 @@ DEX_FILE = "dex.png"
 
 
 def dex_screen(uid: int, trainer: str, dex: dict[int, int], gen: int, page: int,
-               image: bool = True) -> tuple[discord.Embed, discord.ui.View]:
+               image: bool = True, shiny_n: int = 0) -> tuple[discord.Embed, discord.ui.View]:
     """그림 도감: 세대 고르기 + 쪽 넘기기. 버튼 custom_id: pd:<유저>:<세대>:<쪽>"""
     from game import scene
     gen = max(1, min(9, gen))
@@ -912,7 +934,8 @@ def dex_screen(uid: int, trainer: str, dex: dict[int, int], gen: int, page: int,
     got = sum(1 for s in range(a, b + 1) if s in dex)
     e = discord.Embed(title=f"📖 {trainer}의 도감 · {gen}세대 {region}",
                       description=f"이 지방 **{got}/{b - a + 1}** · 전체 **{len(dex)}/{len(D.SPECIES)}**종 · "
-                                  f"{page + 1}/{pages}쪽", color=0xD83C3C)
+                                  f"{page + 1}/{pages}쪽" + (f" · 이로치 ✨ {shiny_n}종" if shiny_n else ""),
+                      color=0xD83C3C)
     if image:
         e.set_image(url=f"attachment://{DEX_FILE}")
     else:

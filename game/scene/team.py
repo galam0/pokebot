@@ -4,6 +4,7 @@ from .. import data as D
 from .. import engine as E
 
 from .base import (
+    _star,
     BOLD,
     FONT,
     H,
@@ -49,9 +50,11 @@ def summary(run: dict, get_sprite: SpriteGetter | None = None, index: int | None
     _panel(d, (6, 22, 110, 133), fill=(248, 248, 240))
     for y in range(23, 133, 6):
         d.line((7, y, 109, y), fill=(236, 236, 228))
-    sp = _sprite(get_sprite, p["sid"], False)
+    sp = _sprite(get_sprite, D.skey(p), False)
     _put(im, d, sp, 58, 116, 100, 92, kmax=2 * SCALE)
     _text(d, (12, 28), f"Lv.{p['lv']}", font=BOLD)
+    if p.get("shiny"):
+        _star(d, 16, 46, 5)
     x = 12
     for t in D.types(p["sid"]):
         x += _type_pill(d, x, 112, t) + 3
@@ -125,12 +128,14 @@ def party(run: dict, get_sprite: SpriteGetter | None = None, title: str = "íŒŒí‹
             fill = tuple(int(c * 0.7) for c in fill)
         d.rounded_rectangle(box, radius=5, fill=fill, outline=(216, 168, 72) if i == run["active"] else PANEL_EDGE, width=2 if i == run["active"] else 1)
         _text(d, (x0 + 5, y0 + 3), f"{i + 1}", fill=(160, 120, 40))
-        sp = _sprite(get_sprite, m["sid"], False)
+        sp = _sprite(get_sprite, D.skey(m), False)
         if fainted or dim:
             sp = sp.convert("LA").convert("RGBA")
         _put(im, d, sp, x0 + 30, y0 + 49, 48, 44)
         name = D.name(m["sid"])
         _text(d, (x0 + 56, y0 + 4), name, font=BOLD, fill=(96, 96, 104) if dim else INK)
+        if m.get("shiny"):
+            _star(d, x0 + 56 + _tw(name, BOLD) + 6, y0 + 9)
         lv = f"Lv.{m['lv']}"
         _text(d, (x0 + 148 - _tw(lv), y0 + 4), lv)
         sx = x0 + 56

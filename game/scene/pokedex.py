@@ -3,6 +3,7 @@
 from .. import data as D
 
 from .base import (
+    _star,
     BOLD,
     H,
     INK,
@@ -43,8 +44,8 @@ def dex_page_sids(gen: int, page: int) -> list[int]:
 
 
 def dex_page(gen: int, page: int, caught: dict[int, int], get_sprite: SpriteGetter | None = None,
-             trainer: str = "", get_icon: "IconGetter | None" = None) -> bytes:
-    """세대별 도감 한 쪽 (6x4). 잡은 포켓몬은 그림과 이름, 못 잡은 포켓몬은 ?"""
+             trainer: str = "", get_icon: "IconGetter | None" = None, shiny: set | None = None) -> bytes:
+    """세대별 도감 한 쪽 (6x4). 잡은 포켓몬은 그림과 이름, 못 잡은 포켓몬은 ?. shiny: 이로치로 잡은 종 (별 표시)"""
     region, a, b = GENS[gen - 1]
     im, d = _canvas((200, 48, 48))
     # 도감 기계 느낌: 빨간 몸체 + 화면
@@ -81,6 +82,8 @@ def dex_page(gen: int, page: int, caught: dict[int, int], get_sprite: SpriteGett
             _put(im, d, sp, cx0 + cw // 2, cy0 + ch - 11, cw - 4, ch - 12)
             name, nf = _shrink(D.name(sid), cw - 4, (SMALL, TINY))
             _text(d, (cx0 + cw // 2 - _tw(name, nf) // 2, cy0 + ch - 12), name, font=nf, fill=INK)
+            if shiny and sid in shiny:
+                _star(d, cx0 + 7, cy0 + 16, 4)
             if caught[sid] > 1:
                 c = f"x{caught[sid]}"
                 _text(d, (cx0 + cw - 3 - _tw(c), cy0 + 1), c, fill=(200, 96, 48))

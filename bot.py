@@ -10,6 +10,7 @@ import io
 import logging
 import os
 import random
+import sys
 from datetime import datetime, timedelta, timezone
 
 import discord
@@ -17,6 +18,7 @@ from aiohttp import web
 from discord import app_commands
 from dotenv import load_dotenv
 
+import social
 import sprites
 import storage
 import ui
@@ -137,6 +139,8 @@ class PokeBot(discord.Client):
                 await handle_dex(interaction, custom_id)
             elif custom_id.startswith("pm:"):
                 await handle_menu(interaction, custom_id)
+            else:
+                await social.dispatch(interaction, custom_id)
         except Exception as e:
             log.exception("버튼 처리 실패 (%s): %s", custom_id, short_error(e))
             await notify_failure(interaction)
@@ -172,15 +176,19 @@ async def get_run(uid: int, mode: str = "adventure") -> dict | None:
 def record_dex(uid: int, run: dict):
     """잡거나 진화한 포켓몬을 도감에 남긴다 (응답 뒤 백그라운드)"""
     sids = list(run.pop("caught_list", []) or [])
+    shinies = list(run.pop("shiny_list", []) or [])
     for m in run["party"] + run.get("box", []):
-        sids += m.pop("evolved", []) or []
-    if sids:
-        _bg(storage.add_dex(uid, sids), "도감 저장")
+        evolved = m.pop("evolved", []) or []
+        sids += evolved
+        if m.get("shiny"):
+            shinies += evolved
+    if sids or shinies:
+        _bg(storage.add_dex(uid, sids, shinies), "도감 저장")
 
 
 # ---------- 그림 ----------
 def _party_sids(run: dict) -> list[int]:
-    return [m["sid"] for m in run["party"]]
+    return [D.skey(m) for m in run["party"]]
 
 
 GIF_SLOW_SEC = 2.0        # 배틀 GIF를 응답 안에서 만드는 데 이보다 오래 걸리면 한동안 멈춘 그림으로
@@ -203,7 +211,7 @@ async def render(run: dict, kind: str = "scene", animate: bool = False, **kwargs
             name = ui.SCENE_FILE
         elif kind == "summary":
             idx = kwargs.get("index")
-            await sprites.ensure(sids=[run["party"][run["active"] if idx is None else idx]["sid"]], timeout=1.0)
+            await sprites.ensure(sids=[D.skey(run["party"][run["active"] if idx is None else idx])], timeout=1.0)
             png = await asyncio.to_thread(scene.summary, run, sprites.get_sprite, idx)
             name = ui.SUMMARY_FILE
         elif kind == "result":
@@ -217,8 +225,15 @@ async def render(run: dict, kind: str = "scene", animate: bool = False, **kwargs
         elif kind == "pc":
             page = kwargs.get("page", 0)
             shown = run["box"][page * ui.PC_PAGE:(page + 1) * ui.PC_PAGE] + run["party"]
-            await sprites.ensure(icons=[m["sid"] for m in shown], timeout=1.0)
+            await sprites.ensure(icons=[D.skey(m) for m in shown], timeout=1.0)
             png = await asyncio.to_thread(scene.pc, run, page, sprites.get_icon, sprites.get_sprite, ui.PC_PAGE)
+            name = ui.SCENE_FILE
+        elif kind == "hof":   # 챔피언이 된 순간: 명예의 전당
+            await sprites.ensure(sids=_party_sids(run), trainers=[H.of(run)], timeout=1.5)
+            league = (run.get("result") or {}).get("league") or "kanto"
+            reg = A.REGIONS.get(league, A.REGIONS["kanto"])
+            png = await asyncio.to_thread(scene.hall_of_fame, run, sprites.get_sprite, sprites.get_trainer, reg["n"],
+                                          run.get(reg["hof"], 1), run.get("name", ""), today_key())
             name = ui.SCENE_FILE
         elif kind == "map":
             png = await asyncio.to_thread(scene.kanto_map, run)
@@ -237,13 +252,13 @@ async def render(run: dict, kind: str = "scene", animate: bool = False, **kwargs
             png = await asyncio.to_thread(scene.rewards, run, sprites.get_sprite, sprites.get_item)
             name = ui.SCENE_FILE
         elif animate:   # 배틀 GIF (버튼이 먼저 나간 뒤 뒤에서 만들어 바꿔 끼운다)
-            await sprites.ensure(sids=[e["sid"]] if e else [], backs=[p["sid"]], anims=[e["sid"]] if e else [],
-                                 anim_backs=[p["sid"]], timeout=4.0)
+            await sprites.ensure(sids=[D.skey(e)] if e else [], backs=[D.skey(p)], anims=[D.skey(e)] if e else [],
+                                 anim_backs=[D.skey(p)], timeout=4.0)
             png = await asyncio.to_thread(scene.battle_gif, run, sprites.get_sprite, sprites.get_anim)
             name = ui.SCENE_GIF
         else:   # 배틀: 움직이는 그림을 미리 받아 뒀으면 바로 GIF, 아니면 멈춘 그림 (응답은 3초 안에)
-            await sprites.ensure(sids=[e["sid"]] if e else [], backs=[p["sid"]], timeout=1.0)
-            ready = (e is None or sprites.has_anim(e["sid"], False)) and sprites.has_anim(p["sid"], True)
+            await sprites.ensure(sids=[D.skey(e)] if e else [], backs=[D.skey(p)], timeout=1.0)
+            ready = (e is None or sprites.has_anim(D.skey(e), False)) and sprites.has_anim(D.skey(p), True)
             if ready and time.monotonic() >= _gif_slow_until:
                 t0 = time.monotonic()
                 png = await asyncio.to_thread(scene.battle_gif, run, sprites.get_sprite, sprites.get_anim)
@@ -251,7 +266,7 @@ async def render(run: dict, kind: str = "scene", animate: bool = False, **kwargs
                 if time.monotonic() - t0 > GIF_SLOW_SEC:
                     _note_slow_gif(time.monotonic() - t0)
             else:
-                sprites.prefetch(anims=[e["sid"]] if e else [], anim_backs=[p["sid"]])
+                sprites.prefetch(anims=[D.skey(e)] if e else [], anim_backs=[D.skey(p)])
                 png = await asyncio.to_thread(scene.battle, run, sprites.get_sprite, None, sprites.get_anim)
                 name = ui.SCENE_FILE
         return discord.File(io.BytesIO(png), filename=name)
@@ -264,9 +279,9 @@ def prefetch_next(run: dict):
     """응답을 보낸 뒤, 다음에 필요할 그림을 미리 받아 둔다."""
     evos = [c for m in run["party"] for c, *_ in D.SPECIES[m["sid"]]["evo"]]
     nxt = (run.get("next_e") or {}).get("mon")
-    ahead = [nxt["sid"]] if nxt else []
+    ahead = [D.skey(nxt)] if nxt else []
     if run.get("e"):   # 트레이너 등장 화면 다음에 나올 상대 포켓몬
-        ahead.append(run["e"]["sid"])
+        ahead.append(D.skey(run["e"]))
     if run.get("mode") == "adventure":   # 이 장소의 야생 포켓몬, 트레이너의 다음 포켓몬
         ahead += [w[0] for w in A.loc(run).get("wild", [])]
         ahead += [m["sid"] for m in (run.get("battle") or {}).get("queue", [])[:1]]
@@ -320,7 +335,7 @@ async def _animate(interaction: discord.Interaction, run: dict, embed: discord.E
         return
     uid = interaction.user.id
     p, e = E.lead(run), run.get("e")
-    await sprites.ensure(anims=[e["sid"]] if e else [], anim_backs=[p["sid"]], timeout=4.0)
+    await sprites.ensure(anims=[D.skey(e)] if e else [], anim_backs=[D.skey(p)], timeout=4.0)
     if _screen_seq.get(uid) != seq:   # 그림을 받는 사이에 화면이 바뀌었다
         return
     gif = await render(run, "scene", animate=True)
@@ -480,11 +495,12 @@ async def show_dex(interaction: discord.Interaction, user, gen: int, page: int, 
         sids = [s for s in S.dex_page_sids(gen, page) if s in dex]
         await sprites.ensure(icons=sids, timeout=1.5)
         png = await asyncio.to_thread(S.dex_page, gen, page, dex, sprites.get_sprite, user.display_name,
-                                      sprites.get_icon)
+                                      sprites.get_icon, storage.shiny(user.id))
         file = discord.File(io.BytesIO(png), filename=ui.DEX_FILE)
     except Exception as ex:
         log.warning("도감 그림 실패: %s", short_error(ex))
-    embed, view = ui.dex_screen(user.id, user.display_name, dex, gen, page, image=file is not None)
+    embed, view = ui.dex_screen(user.id, user.display_name, dex, gen, page, image=file is not None,
+                                shiny_n=len(storage.shiny(user.id)))
     if send:
         kwargs = {"file": file} if file else {}
         await interaction.response.send_message(embed=embed, view=view, ephemeral=ephemeral, **kwargs)
@@ -991,6 +1007,9 @@ async def send_records(interaction: discord.Interaction, ephemeral: bool = False
 @bot.tree.command(name="기록", description="모험 랭킹(배지·챔피언·도감)과 오늘의 데일리·이번 주 챌린지 랭킹")
 async def records(interaction: discord.Interaction):
     await send_records(interaction)
+
+
+social.register(sys.modules[__name__])   # /플레이어 /프로필 /대전 /교환
 
 
 async def main():

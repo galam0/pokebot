@@ -1077,6 +1077,8 @@ def throw_ball(run: dict, item: str, rng: random.Random | None = None) -> str:
             log.append(f"{ename}의 HP와 PP가 모두 회복됐다!")
         run["caught"] = run.get("caught", 0) + 1
         run.setdefault("caught_list", []).append(e["sid"])
+        if e.get("shiny"):   # 도감에 ✨ 표시
+            run.setdefault("shiny_list", []).append(e["sid"])
         if run.get("rule") == "lv50":
             mon["cap"] = 50
         log.extend(win(run, rng, caught=True))

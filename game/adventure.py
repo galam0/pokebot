@@ -35,6 +35,7 @@ START_BAG = {"poke-ball": 5, "potion": 3}
 STARTERS = list(E.STARTER_POOL)            # 1~9세대 스타팅 27마리
 LEGEND_CATCH_RATE = 45                     # 모험에서 전설은 이만큼은 잡히게 (원래 3이라 너무 안 잡힘)
 FIND_CHANCE = 0.12        # 풀숲 탐색에서 아이템을 주울 확률
+SHINY_CHANCE = 1 / 200    # 야생·전설이 색이 다른 포켓몬(이로치)일 확률 (본가보다 높게: 디스코드에서 만날 수 있게)
 NUGGET_PRICE = 5000
 EXP_MULT = 2.0            # 모험 경험치 배율 (디스코드에서 너무 오래 수련하지 않게. 레벨 제한이 있어서 너무 세지지는 않음)
 TRAINER_EXP = 1.5         # 트레이너 배틀 경험치 배율 (본가처럼)
@@ -379,9 +380,12 @@ def meet_legend(run: dict, rng: random.Random | None = None) -> list[str]:
         raise ValueError("no legend")
     sid, lv = lg
     mons = _team([(sid, lv)], rng, 31)
+    shiny = _roll_shiny(mons[0], rng)
     _begin(run, "legend", mons, D.name(sid), sid=sid)
     run["log"] = [f"✨ **{D.name(sid)}** Lv.{lv}이(가) 모습을 드러냈다!" if sid != 143 else
                   f"길을 막고 자던 **{D.name(sid)}** Lv.{lv}이(가) 눈을 떴다!"]
+    if shiny:
+        run["log"].append("🌟 몸 색깔이 다르다! **색이 다른 포켓몬**이다!")
     return run["log"]
 
 
@@ -454,9 +458,18 @@ def explore(run: dict, rng: random.Random | None = None) -> list[str]:
     if region_of(run["loc"]) != "kanto":   # 성도·호연: 레벨에 맞게 진화한 모습으로
         sid = E._evolve_for_level(sid, lv, rng)
     mon = E.new_mon(sid, lv, rng)
+    shiny = _roll_shiny(mon, rng)
     _begin(run, "wild", [mon], f"야생 {D.name(sid)}")
     run["log"] = [f"앗! 야생의 **{D.name(sid)}** Lv.{lv}이(가) 튀어나왔다!"]
+    if shiny:
+        run["log"].insert(0, "🌟 반짝! 몸 색깔이 다른 포켓몬이다!")
     return run["log"]
+
+
+def _roll_shiny(mon: dict, rng: random.Random) -> bool:
+    if rng.random() < SHINY_CHANCE:
+        mon["shiny"] = True
+    return bool(mon.get("shiny"))
 
 
 def give_item(run: dict, item: str, cnt: int = 1) -> list[str]:
@@ -547,7 +560,7 @@ def _result(run: dict, b: dict, caught: bool) -> dict:
     """배틀이 끝나고 필드로 돌아올 때 한 번 보여줄 결과 (포켓몬마다 얻은 경험치·레벨)"""
     foe = b.get("name") if b.get("kind") not in ("wild", "legend") else D.name(run["e"]["sid"])
     return {"kind": b.get("kind", "wild"), "name": foe, "caught": caught, "prize": b.get("prize", 0),
-            "gains": b.get("gains", {})}
+            "gains": b.get("gains", {}), "league": b.get("league")}
 
 
 def _victory(run: dict, rng: random.Random, caught: bool) -> list[str]:

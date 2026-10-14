@@ -3,6 +3,7 @@
 import math
 
 from .. import adventure as A
+from .. import data as D
 from .. import engine as E
 from .. import hoenn as HO
 from .. import johto as J
@@ -82,7 +83,7 @@ def menu(info: dict, get_sprite: SpriteGetter | None = None) -> bytes:
     d.rectangle((173, 39, 311, 52), fill=(72, 120, 200))
     party = run["party"] if run else []
     _text(d, (178, 40), "파티" if party else "함께 떠날 포켓몬", font=BOLD, fill=(255, 255, 255), shadow=(32, 56, 120))
-    sids = [(m["sid"], m["lv"]) for m in party] or [(1, None), (4, None), (7, None), (252, None), (393, None), (906, None)]
+    sids = [(D.skey(m), m["lv"]) for m in party] or [(1, None), (4, None), (7, None), (252, None), (393, None), (906, None)]
     for i, (sid, lv) in enumerate(sids[:6]):
         cx, cy = 196 + (i % 3) * 45, 56 + (i // 3) * 42
         d.ellipse((cx - 16, cy + 26, cx + 16, cy + 32), fill=(200, 212, 228))

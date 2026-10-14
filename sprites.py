@@ -34,9 +34,13 @@ _session: aiohttp.ClientSession | None = None
 _sprite_names: dict | None = None
 
 
+SHINY = 10000   # 이로치 그림 키 = 종 번호 + SHINY (game/data.py 와 같은 값)
+
+
 def _names(sid) -> list:
     """[앞모습, 뒷모습, 아이콘] 파일 이름 (game/sprite_names.json, tools/build_sprite_names.py로 만든다)"""
     global _sprite_names
+    sid = int(sid) % SHINY
     if _sprite_names is None:
         f = Path(__file__).resolve().parent / "game" / "sprite_names.json"
         _sprite_names = json.loads(f.read_text()) if f.exists() else {}
@@ -45,11 +49,16 @@ def _names(sid) -> list:
 
 def _mon_url(sid, back: bool) -> str | None:
     """모든 세대를 같은 블랙·화이트 도트 스타일로: smogon/sprites gen5 (없으면 쇼다운 gen5)"""
+    shiny = int(sid) >= SHINY   # 이로치: 쇼다운은 gen5-shiny 폴더, smogon은 파일 이름 끝에 -s
     name = _names(sid)[1 if back else 0]
     if not name:
         return None
     if name.startswith("sd:"):
-        return f"{SHOWDOWN}/{'gen5-back' if back else 'gen5'}/{name[3:]}.png"
+        folder = ("gen5-back" if back else "gen5") + ("-shiny" if shiny else "")
+        return f"{SHOWDOWN}/{folder}/{name[3:]}.png"
+    if shiny:
+        stem, ext = name.rsplit(".", 1)
+        name = f"{stem}-s.{ext}"
     return f"{SMOGON}/sprites/gen5/{name}"
 
 
@@ -57,7 +66,8 @@ def _key_url(kind: str, name) -> list[tuple[str, str | None]]:
     if kind in ("front", "back"):
         return [(f"{kind}:{name}", _mon_url(name, kind == "back"))]
     if kind in ("anim", "animback"):   # 배틀 GIF는 쇼다운 3D 움직이는 그림 (1~9세대 모두). 없으면 멈춘 그림이 통통 뛴다
-        return [(f"{kind}:{name}", f"{BASE}/pokemon/other/showdown/{'back/' if kind == 'animback' else ''}{name}.gif")]
+        sub = ("back/" if kind == "animback" else "") + ("shiny/" if int(name) >= SHINY else "")
+        return [(f"{kind}:{name}", f"{BASE}/pokemon/other/showdown/{sub}{int(name) % SHINY}.gif")]
     if kind == "icon":
         icon = _names(name)[2]
         return [(f"icon:{name}", f"{SMOGON}/minisprites/pokemon/gen6/{icon}" if icon else None)]

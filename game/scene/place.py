@@ -5,6 +5,7 @@ from PIL import Image
 from PIL import ImageDraw
 
 from .. import adventure as A
+from .. import data as D
 from .. import engine as E
 from .. import heroes as HR
 from ..text import josa
@@ -239,7 +240,7 @@ def pc(run: dict, page: int = 0, get_icon: IconGetter | None = None, get_sprite:
     for i, m in enumerate(chunk):
         r, c = divmod(i, PC_COLS)
         x, y = bx + 6 + c * sw, by + 30 + r * sh
-        _put(im, d, _icon(get_icon, get_sprite, m["sid"]), x + sw // 2, y + sh, sw, sh + 8)
+        _put(im, d, _icon(get_icon, get_sprite, D.skey(m)), x + sw // 2, y + sh, sw, sh + 8)
     if not chunk:
         _text(d, (bx + 80 - _tw("비어 있어요", BOLD) // 2, by + 80), "비어 있어요", font=BOLD, fill=(40, 88, 40))
     # 왼쪽: 지금 파티 (2줄 x 3)
@@ -252,7 +253,7 @@ def pc(run: dict, page: int = 0, get_icon: IconGetter | None = None, get_sprite:
                             (216, 128, 112), outline=(120, 40, 40))
         if i < len(run["party"]):
             m = run["party"][i]
-            _put(im, d, _icon(get_icon, get_sprite, m["sid"]), x + 18, y + 32, 34, 30)
+            _put(im, d, _icon(get_icon, get_sprite, D.skey(m)), x + 18, y + 32, 34, 30)
             lv = f"Lv.{m['lv']}"
             _text(d, (x + 58 - _tw(lv), y + 26), lv)
     # 제목
@@ -301,7 +302,7 @@ def field(run: dict, get_sprite: SpriteGetter | None = None, get_trainer: Traine
         im.paste(hero, (6, 118 - hero.height), hero)
         hero_right = 6 + hero.width
     if run["party"]:
-        sp = _sprite(get_sprite, E.lead(run)["sid"], False)
+        sp = _sprite(get_sprite, D.skey(E.lead(run)), False)
         cx = max(56, hero_right + sp.width // 2 - 6) if hero else 56
         im.paste(sp, (cx - sp.width // 2, 116 - sp.height), sp)
     cap = "없음" if A.level_cap(run) >= E.MAX_LEVEL else f"Lv.{A.level_cap(run)}"
