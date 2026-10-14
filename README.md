@@ -18,7 +18,9 @@ PokeRogue처럼 웨이브를 넘어가는 **데일리·주간 챌린지**가 있
   PC·도감 같은 작은 칸은 같은 스타일의 메뉴 아이콘. 도트가 깨지지 않게 정수배로만 키워요
 - 배틀 화면은 **GIF**: 1~5세대는 블랙·화이트처럼 움직이고, 6세대부터는 통통 뛰어요 (기술 연출은 없음)
 - 관동 필드는 **파이어레드 원본 맵** 위에 주인공이 서 있는 장면 (장소 팻말 + 대화창). 마을은 센터 문 앞, 센터에서 쉬면 간호순 앞,
-  숍은 점원 앞, 체육관에 도전하면 관장 앞. 호연은 **에메랄드 원본 맵** (`assets/maps/em/`), 성도는 GBA 원본이 없어서 그린 배경
+  숍은 점원 앞, 체육관에 도전하면 관장 앞. 호연은 **에메랄드 원본 맵** (`assets/maps/em/`).
+  성도 마을·도로·센터·숍·체육관은 **크리스탈 원본 맵** (`assets/maps/gs/`), 동굴·탑·숲 9곳은 던전에 들어갈 때 나오는
+  **하트골드 원본 장소 그림** (`assets/maps/hg/`) 앞에 주인공 뒷모습
 - 트레이너·관장·사천왕·라이벌과 싸우기 전에 **상대가 나와서 대사를 해요** (⚔️ 승부! 버튼을 누르면 포켓몬이 나와요).
   관동·호연은 파이어레드·에메랄드 트레이너 그림, 성도의 관장·사천왕·라이벌은 하트골드 그림 (`tools/build_trainer_pics.py`)
 - PC는 파이어레드 박스 화면 (숲 배경지에 박스 포켓몬, 왼쪽에 지금 파티)
@@ -83,6 +85,7 @@ PokeRogue처럼 웨이브를 넘어가는 **데일리·주간 챌린지**가 있
   - 위에서 아래로만 가져와요 (`base` ← 나머지). 새 화면을 만들면 알맞은 파일에 넣고 `__init__.py`에 이름만 추가
 - `sprites.py` PokeAPI 스프라이트 캐시
 - `assets/maps/` 파이어레드 맵 (`tools/render_maps.py`), `assets/maps/places.json`·`assets/people/`·`assets/pc/` (`tools/build_places.py`)
+  - 성도는 `tools/build_johto.py` (크리스탈·하트골드). `build_places.py`를 다시 돌리면 그다음에 이것도 다시 돌려야 성도 장면이 남아요
 - `game/heroes.py` 주인공 목록, `assets/trainers/` 주인공 그림 (smogon/sprites, 6·8·9세대는 쇼다운에서 받음)
 - `storage.py` Neon Postgres 저장 (`DATABASE_URL`), `ui.py` 화면·버튼, `bot.py` 명령어·버튼 처리
 - 시뮬레이션: `python tools/sim_adventure.py 3 2` (모험 자동 플레이, 1·2·3 = 관동·성도·호연 챔피언까지), `python tools/simulate.py 40` (웨이브 게임)

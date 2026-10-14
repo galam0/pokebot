@@ -88,7 +88,7 @@ def place_data(loc_key: str, kind: str = "field") -> dict | None:
         f = _ASSETS / "maps" / "places.json"
         _places = json.loads(f.read_text()) if f.exists() else {}
     sc = (_places.get(loc_key) or {}).get(kind)
-    if not sc or _asset(f"maps/{sc['map']}.png") is None:
+    if not sc or _asset(f"maps/{sc.get('art') or sc['map']}.png") is None:
         return None
     return sc
 
@@ -141,6 +141,8 @@ def map_scene(run: dict, kind: str = "field", lines: list[tuple[str, tuple]] | N
     sc = place_data(run["loc"], kind)
     if sc is None:
         return None
+    if "art" in sc:
+        return _art_scene(run, sc["art"], kind, lines, get_trainer)
     full = _asset(f"maps/{sc['map']}.png").copy()
     for name, x, y, face in sc["npcs"]:   # 사람들 (발이 칸 아래에 오게)
         img = _walker(name, face)
@@ -162,6 +164,27 @@ def map_scene(run: dict, kind: str = "field", lines: list[tuple[str, tuple]] | N
         mask = Image.new("L", (W, H), 255)
         ImageDraw.Draw(mask).rectangle((bx, by, bx + full.width - 1, by + full.height - 1), fill=0)
         im.paste((0, 0, 0), (0, 0), mask)
+    return _overlay(im, d, run, kind, lines, get_trainer, me is not None)
+
+
+def _art_scene(run: dict, art: str, kind: str, lines, get_trainer) -> bytes:
+    """하트골드 장소 그림 (256x160) 가운데, 양옆은 그림 가장자리를 늘려 어둡게, 앞에 주인공 뒷모습"""
+    pic = _asset(f"maps/{art}.png").convert("RGB")
+    im, d = _canvas()
+    side = (W - pic.width) // 2
+    for x0, edge in ((0, pic.crop((0, 0, 1, pic.height))), (W - side, pic.crop((pic.width - 1, 0, pic.width, pic.height)))):
+        im.paste(edge.resize((side, H), Image.NEAREST).point(lambda v: v * 3 // 5), (x0, 0))
+    im.paste(pic.crop((0, 0, pic.width, min(pic.height, H))), (side, 0))
+    walker = _overworld(HR.of(run))
+    me = _walker(walker, "up") if walker else None
+    if me:
+        im.paste(me, (W // 2 - me.width // 2, 142 - me.height), me)
+    return _overlay(im, d, run, kind, lines, get_trainer, me is not None)
+
+
+def _overlay(im, d, run: dict, kind: str, lines, get_trainer, has_walker: bool) -> bytes:
+    """맵 장면 위에 장소 팻말 · 돈 · 배지 · 대화창"""
+    me = has_walker
     # 장소 팻말
     L = A.loc(run)
     title = {"center": f"{L['n']} 포켓몬센터", "mart": f"{L['n']} " + ("백화점" if L.get("dept") else "프렌들리숍"),
@@ -249,7 +272,7 @@ def _log_lines(run: dict, n: int = 3) -> list[tuple[str, tuple]]:
 
 def field(run: dict, get_sprite: SpriteGetter | None = None, get_trainer: TrainerGetter | None = None,
           place: str = "field") -> bytes:
-    """모험 필드 화면. 관동은 파이어레드 맵 장면, 맵이 없는 곳(성도·호연 등)은 그린 배경"""
+    """모험 필드 화면. 관동·호연·성도는 원본 맵 장면(성도 던전은 하트골드 장소 그림), 장면이 없는 곳은 그린 배경"""
     if place in ("center", "home", "gym"):
         lines = _log_lines(run) or None
     elif place == "mart":
