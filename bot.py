@@ -230,7 +230,7 @@ async def render(run: dict, kind: str = "scene", animate: bool = False, **kwargs
         else:   # 배틀: 먼저 멈춘 그림 (빠르다)
             await sprites.ensure(sids=[e["sid"]] if e else [], backs=[p["sid"]], timeout=1.0)
             sprites.prefetch(anims=[e["sid"]] if e else [], anim_backs=[p["sid"]])
-            png = await asyncio.to_thread(scene.battle, run, sprites.get_sprite)
+            png = await asyncio.to_thread(scene.battle, run, sprites.get_sprite, None, sprites.get_anim)
             name = ui.SCENE_FILE
         return discord.File(io.BytesIO(png), filename=name)
     except Exception as ex:

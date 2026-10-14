@@ -159,15 +159,34 @@ def _paste_foot(canvas: Image.Image, img: Image.Image, cx: int, foot: int):
     canvas.paste(img, (cx - img.width // 2, foot - img.height), img)
 
 
-def battle(run: dict, get_sprite: SpriteGetter | None = None, message: list[str] | None = None) -> bytes:
+AnimGetter = Callable[[int, bool], list | None]   # (종 번호, 뒷모습?) -> [(그림, ms)] 또는 None
+
+
+def _actor_frames(get_sprite, get_anim, sid: int, back: bool, fainted: bool):
+    """(움직이는 프레임 또는 None, 멈춘 그림) — 큰 그림 크기. 쓰러지면 첫 프레임을 흑백으로 멈춘다"""
+    still = _actor_big(get_sprite, sid, back, False)
+    raw = None
+    if get_anim:
+        try:
+            raw = get_anim(sid, back)
+        except Exception:
+            raw = None
+    if not raw:
+        return None, (_actor_big(get_sprite, sid, back, True) if fainted else still)
+    frames = _anim_big(raw, still, back)
+    if fainted:
+        return None, _fainted(frames[0][0])
+    return frames, frames[0][0]
+
+
+def battle(run: dict, get_sprite: SpriteGetter | None = None, message: list[str] | None = None,
+           get_anim: "AnimGetter | None" = None) -> bytes:
+    """멈춘 배틀 화면. 움직이는 그림을 이미 받아 뒀으면 그 첫 프레임 (뒤에 오는 GIF와 같은 모습)"""
     base, over, actors = _battle_layers(run, message)
     for sid, back, cx, foot, fainted in actors:
-        _paste_foot(base, _actor_big(get_sprite, sid, back, fainted), cx * SCALE, foot * SCALE)
+        _paste_foot(base, _actor_frames(get_sprite, get_anim, sid, back, fainted)[1], cx * SCALE, foot * SCALE)
     base.paste(over, (0, 0), over)
     return _png(base)
-
-
-AnimGetter = Callable[[int, bool], list | None]   # (종 번호, 뒷모습?) -> [(그림, ms)] 또는 None
 
 
 GIF_STEP = 80          # 프레임 간격 (ms)
@@ -179,11 +198,21 @@ GIF_MAX_MS = 1600      # 한 바퀴 최대 길이 (프레임이 많으면 만들
 GIF_IDLE_MS = 1200     # 움직이는 그림이 없을 때 숨쉬기 한 바퀴
 
 
-def _anim_big(frames: list, still: Image.Image) -> list[tuple[Image.Image, int]]:
-    """움직이는 스프라이트를 멈춘 그림과 비슷한 크기가 되도록 정수배로 키운다 (도트가 고르게)"""
+ANIM_MAX = {False: (164, 74), True: (150, 100)}   # 움직이는 그림 최대 (너비, 높이): 작은 캔버스 기준 (화면·정보창 밖으로 안 나가게)
+
+
+def _anim_big(frames: list, still: Image.Image, back: bool = False) -> list[tuple[Image.Image, int]]:
+    """움직이는 그림(쇼다운 3D)은 원래 크기 비율이 맞춰져 있어서 고정 배율 (앞 3배·뒤 4배, 멈춘 그림과 같은 배율).
+    너무 크면(큰 포켓몬·날개 펄럭임) 칸에 맞게 줄인다"""
     h = max(f.height for f, _ in frames)
-    k = max(1, min(BACK_ZOOM, round(still.height / h))) if still.getbbox() else 2
-    return [(f.resize((f.width * k, f.height * k), Image.NEAREST), ms) for f, ms in frames]
+    w = max(f.width for f, _ in frames)
+    k = BACK_ZOOM if back else SCALE
+    mw, mh = (v * SCALE for v in ANIM_MAX[back])
+    if w * k <= mw and h * k <= mh:
+        return [(f.resize((f.width * k, f.height * k), Image.NEAREST), ms) for f, ms in frames]
+    s = min(mw / w, mh / h)
+    return [(f.resize((max(1, round(f.width * s)), max(1, round(f.height * s))),
+                      Image.NEAREST if s >= 1 else Image.BOX), ms) for f, ms in frames]
 
 
 def _at(frames: list[tuple[Image.Image, int]], t: int) -> Image.Image:
@@ -206,15 +235,7 @@ def battle_gif(run: dict, get_sprite: SpriteGetter | None = None, get_anim: Anim
     base, over, actors = _battle_layers(run, message)
     tracks = []   # (프레임 목록 또는 None, 멈춘 그림, cx, foot, 위상, 쓰러짐?)
     for i, (sid, back, cx, foot, fainted) in enumerate(actors):
-        still = _actor_big(get_sprite, sid, back, fainted)
-        frames = None
-        if get_anim and not fainted:
-            try:
-                raw = get_anim(sid, back)
-            except Exception:
-                raw = None
-            if raw:
-                frames = _anim_big(raw, still)
+        frames, still = _actor_frames(get_sprite, get_anim, sid, back, fainted)
         tracks.append((frames, still, cx * SCALE, foot * SCALE, 0.5 * i, fainted))
     loops = [sum(ms for _, ms in fr) for fr, *_ in tracks if fr]
     total = min(GIF_MAX_MS, max(loops)) if loops else GIF_IDLE_MS

@@ -29,7 +29,7 @@ TRAINER_REMOTE = {"florian": "florian-s", "juliana": "juliana-s"}   # 쇼다운 
 _cache: dict[str, Image.Image | list | None] = {}     # 키 -> 이미지 또는 GIF 프레임 목록 (None = 없는 그림)
 _pending: dict[str, asyncio.Task] = {}
 _anim_keys: deque[str] = deque()   # GIF 프레임은 크니까 최근 것만 들고 있는다
-ANIM_KEEP = 24
+ANIM_KEEP = 16
 _session: aiohttp.ClientSession | None = None
 _sprite_names: dict | None = None
 
@@ -56,9 +56,8 @@ def _mon_url(sid, back: bool) -> str | None:
 def _key_url(kind: str, name) -> list[tuple[str, str | None]]:
     if kind in ("front", "back"):
         return [(f"{kind}:{name}", _mon_url(name, kind == "back"))]
-    if kind in ("anim", "animback"):   # 움직이는 그림은 1~5세대(.gif)만. 나머지는 None → 멈춘 그림이 통통 뛴다
-        url = _mon_url(name, kind == "animback")
-        return [(f"{kind}:{name}", url if url and url.endswith(".gif") else None)]
+    if kind in ("anim", "animback"):   # 배틀 GIF는 쇼다운 3D 움직이는 그림 (1~9세대 모두). 없으면 멈춘 그림이 통통 뛴다
+        return [(f"{kind}:{name}", f"{BASE}/pokemon/other/showdown/{'back/' if kind == 'animback' else ''}{name}.gif")]
     if kind == "icon":
         icon = _names(name)[2]
         return [(f"icon:{name}", f"{SMOGON}/minisprites/pokemon/gen6/{icon}" if icon else None)]
@@ -81,7 +80,17 @@ def _frames(img: Image.Image) -> list[tuple[Image.Image, int]]:
     if not boxes:
         return frames
     box = (min(b[0] for b in boxes), min(b[1] for b in boxes), max(b[2] for b in boxes), max(b[3] for b in boxes))
-    return [(f.crop(box), ms) for f, ms in frames]
+    frames = [(f.crop(box), ms) for f, ms in frames]
+    # 3D 그림은 프레임이 100개 넘는 것도 있다: 배틀 GIF 간격(80ms)·최대 길이(1.6초)로 미리 줄여 메모리를 아낀다
+    step, total = 80, min(1600, sum(ms for _, ms in frames))
+    out, t, i, acc = [], 0, 0, frames[0][1]
+    while t < total:
+        while t >= acc and i < len(frames) - 1:
+            i += 1
+            acc += frames[i][1]
+        out.append((frames[i][0], step))
+        t += step
+    return out or frames[:1]
 
 
 async def _fetch(key: str, url: str):
