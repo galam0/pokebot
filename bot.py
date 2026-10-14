@@ -276,7 +276,7 @@ def prefetch_next(run: dict):
 
 
 async def show(interaction: discord.Interaction, run: dict, make, send: bool = False, ephemeral: bool = False,
-               content: str | None = None):
+               content: str | None = None, thread_name: str | None = None):
     """make(image: bool) -> ui.Screen 를 그림과 함께 보여준다 (send=False면 지금 메시지를 바꿈)"""
     probe = make(True)
     seq = _screen_seq[interaction.user.id] = _screen_seq.get(interaction.user.id, 0) + 1
@@ -284,7 +284,12 @@ async def show(interaction: discord.Interaction, run: dict, make, send: bool = F
     sc = probe if file else make(False)
     if file and sc.embed.image and sc.embed.image.url != f"attachment://{file.filename}":
         sc.embed.set_image(url=f"attachment://{file.filename}")
-    if send:
+    in_thread = bool(send and thread_name and isinstance(interaction.channel, discord.TextChannel))
+    if in_thread:
+        # 이어하기도 새 게임처럼 전용 스레드에서 (못 만들면 아래에서 지금 채널에)
+        await post_in_thread(interaction, thread_name, content or sc.content, [sc.embed], sc.view,
+                             [file] if file else [])
+    elif send:
         kwargs = {"file": file} if file else {}
         await interaction.response.send_message(content=content or sc.content, embed=sc.embed, view=sc.view,
                                                 ephemeral=ephemeral, **kwargs)
@@ -292,7 +297,7 @@ async def show(interaction: discord.Interaction, run: dict, make, send: bool = F
         await interaction.response.edit_message(content=content, embeds=[sc.embed], view=sc.view,
                                                 attachments=[file] if file else [])
     prefetch_next(run)
-    if file and file.filename == ui.SCENE_FILE and probe.image == "scene" and _is_battle_scene(run):
+    if file and not in_thread and file.filename == ui.SCENE_FILE and probe.image == "scene" and _is_battle_scene(run):
         # 멈춘 그림으로 응답했으면 움직이는 그림을 뒤에서 바꿔 끼워 본다 (Render 공유 IP는 429로 막히는 일이 많다)
         _bg(_animate(interaction, run, sc.embed, seq), "배틀 GIF")
 
@@ -415,7 +420,7 @@ async def start_game(interaction: discord.Interaction, mode: str):
     slot = ui.slot_of(uid, mode)
     run = await get_run(uid, mode)
     if run and run["phase"] in ACTIVE:
-        await show(interaction, run, _main(slot, name, run), send=True,
+        await show(interaction, run, _main(slot, name, run), send=True, thread_name=f"{name}의 관동 모험"[:90],
                    content="모험을 이어서 해요!" if mode == "adventure" else
                    "진행 중인 게임이 있어요! 이어서 하거나, 🏳️ 포기 후 새로 시작할 수 있어요.")
         return
@@ -460,7 +465,12 @@ async def show_dex(interaction: discord.Interaction, user, gen: int, page: int, 
     except Exception as ex:
         log.warning("도감 그림 실패: %s", short_error(ex))
     embed, view = ui.dex_screen(user.id, user.display_name, dex, gen, page, image=file is not None)
-    if send:
+    in_thread = bool(send and thread_name and isinstance(interaction.channel, discord.TextChannel))
+    if in_thread:
+        # 이어하기도 새 게임처럼 전용 스레드에서 (못 만들면 아래에서 지금 채널에)
+        await post_in_thread(interaction, thread_name, content or sc.content, [sc.embed], sc.view,
+                             [file] if file else [])
+    elif send:
         kwargs = {"file": file} if file else {}
         await interaction.response.send_message(embed=embed, view=view, ephemeral=ephemeral, **kwargs)
     else:
