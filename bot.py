@@ -465,12 +465,7 @@ async def show_dex(interaction: discord.Interaction, user, gen: int, page: int, 
     except Exception as ex:
         log.warning("도감 그림 실패: %s", short_error(ex))
     embed, view = ui.dex_screen(user.id, user.display_name, dex, gen, page, image=file is not None)
-    in_thread = bool(send and thread_name and isinstance(interaction.channel, discord.TextChannel))
-    if in_thread:
-        # 이어하기도 새 게임처럼 전용 스레드에서 (못 만들면 아래에서 지금 채널에)
-        await post_in_thread(interaction, thread_name, content or sc.content, [sc.embed], sc.view,
-                             [file] if file else [])
-    elif send:
+    if send:
         kwargs = {"file": file} if file else {}
         await interaction.response.send_message(embed=embed, view=view, ephemeral=ephemeral, **kwargs)
     else:
